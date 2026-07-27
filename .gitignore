@@ -22,3 +22,7 @@ frontend/dist/
 .DS_Store
 data/raw/
 data/processed/
+
+# Hand-downloaded NFL data (see data/manual/README.md)
+data/manual/*
+!data/manual/README.md

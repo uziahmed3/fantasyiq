@@ -4,8 +4,11 @@ from pathlib import Path
 DATA_DIR = Path(os.getenv("PIPELINE_DATA_DIR", "/data"))
 RAW_DIR = DATA_DIR / "raw"
 CLEAN_DIR = DATA_DIR / "clean"
+# Hand-downloaded parquet files land here (bind-mounted from ./data/manual on the host).
+# Lets the pipeline run with no network access at all - see ingest.py.
+MANUAL_DIR = Path(os.getenv("MANUAL_DATA_DIR", "/data/manual"))
 
-SEASONS = [int(s) for s in os.getenv("INGEST_SEASONS", "2022,2023").split(",") if s.strip()]
+SEASONS = [int(s) for s in os.getenv("INGEST_SEASONS", "2024,2025").split(",") if s.strip()]
 POSITIONS = [p.strip().upper() for p in os.getenv("INGEST_POSITIONS", "WR,RB,TE").split(",")]
 
 ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://ml-service:9000")

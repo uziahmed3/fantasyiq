@@ -66,6 +66,27 @@ make test      # backend + ml-service + pipeline test suites
 First run pulls ~2GB of base images and a few hundred MB of NFL data — budget 10-15
 minutes. After that, `docker compose up -d` is seconds.
 
+### If your network blocks the download
+
+Corporate proxies commonly allow a browser download while blocking the same host from
+inside a container — the proxy is configured in the browser and nowhere else. The
+pipeline has an offline path for exactly this:
+
+```powershell
+.\run.ps1 -DataUrls    # prints the exact nflverse files to download
+# save each into .\data\manual\ using your browser
+.\run.ps1 -Offline     # runs with zero network access
+```
+
+```bash
+docker compose run --rm pipeline python -m ingest --urls   # same list
+docker compose run --rm pipeline python -m run_weekly --source manual
+```
+
+`ingest.py` in `auto` mode (the default) uses `data/manual/` whenever the files are all
+present and only falls back to the network otherwise, so once the parquet files are on
+disk everything downstream is identical.
+
 | Surface | URL |
 | --- | --- |
 | API docs (OpenAPI) | http://localhost:8000/docs |

@@ -62,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--season", type=int, default=max(SEASONS))
     parser.add_argument("--week", type=int, default=None, help="Week to project (default: next)")
     parser.add_argument("--skip-ingest", action="store_true", help="Reuse the raw parquet on disk")
+    parser.add_argument(
+        "--source",
+        choices=["auto", "manual", "network"],
+        default="auto",
+        help="Where ingest gets its data: auto (default), manual (./data/manual), or network",
+    )
     parser.add_argument("--skip-score", action="store_true", help="ETL only, no predictions")
     args = parser.parse_args(argv)
 
@@ -73,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             log.info("stage_skipped", stage="ingest")
         else:
             log.info("stage_start", stage="ingest")
-            stats |= ingest.run([args.season])
+            stats |= ingest.run([args.season], source=args.source)
 
         log.info("stage_start", stage="clean")
         stats |= clean.run()

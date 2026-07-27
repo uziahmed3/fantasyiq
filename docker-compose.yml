@@ -68,6 +68,8 @@ services:
     volumes:
       - ./pipeline:/app
       - pipeline-data:/data
+      # Hand-downloaded parquet files, for networks that block the container.
+      - ./data/manual:/data/manual:ro
     depends_on:
       postgres: {condition: service_healthy}
     # Long-running scheduler; use `make ingest` to trigger a one-off run.

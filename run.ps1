@@ -7,6 +7,8 @@
 .EXAMPLE
   .\run.ps1                 # full setup: build, ingest, train, project
   .\run.ps1 -Seasons 2025   # only pull one season (faster)
+  .\run.ps1 -DataUrls       # print files to download by hand (corporate networks)
+  .\run.ps1 -Offline        # use ./data/manual instead of downloading
   .\run.ps1 -SkipTrain      # boot + ingest only
   .\run.ps1 -Stop           # shut everything down
   .\run.ps1 -Nuke           # shut down and delete all data volumes
@@ -14,6 +16,8 @@
 param(
   [string]$Seasons = "2024,2025",
   [switch]$SkipIngest,
+  [switch]$Offline,
+  [switch]$DataUrls,
   [switch]$SkipTrain,
   [switch]$Stop,
   [switch]$Nuke,
@@ -32,6 +36,15 @@ function Die($msg)  { Write-Host "`nERROR: $msg" -ForegroundColor Red; exit 1 }
 if ($Stop) { docker compose down; exit 0 }
 if ($Nuke) { docker compose down -v; Ok "Containers and volumes removed."; exit 0 }
 if ($Logs) { docker compose logs -f backend ml-service; exit 0 }
+
+if ($DataUrls) {
+  # Works without the rest of the stack running.
+  if (-not (Test-Path ".env")) { Copy-Item ".env.example" ".env" }
+  New-Item -ItemType Directory -Force -Path "data\manual" | Out-Null
+  docker compose run --rm -e INGEST_SEASONS=$Seasons pipeline python -m ingest --urls
+  Write-Host "Save those files into: $((Resolve-Path 'data\manual').Path)" -ForegroundColor Cyan
+  exit 0
+}
 
 # ---------- preflight ----------
 Step "Checking Docker"
@@ -85,10 +98,27 @@ if (-not $healthy) {
 
 # ---------- data ----------
 if (-not $SkipIngest) {
-  Step "Pulling real NFL data (seasons: $Seasons) and loading Postgres"
-  Warn "First run downloads a few hundred MB from nflverse; 2-5 minutes is normal."
-  docker compose run --rm -e INGEST_SEASONS=$Seasons pipeline python -m run_weekly --skip-score
-  if ($LASTEXITCODE -ne 0) { Die "Ingest failed. Check your internet connection and retry." }
+  $src = if ($Offline) { "manual" } else { "auto" }
+  Step "Loading NFL data (seasons: $Seasons, source: $src)"
+  if ($Offline) {
+    Warn "Offline mode: reading parquet files from .\data\manual"
+  } else {
+    Warn "First run downloads a few hundred MB from nflverse; 2-5 minutes is normal."
+  }
+  docker compose run --rm -e INGEST_SEASONS=$Seasons pipeline `
+    python -m run_weekly --skip-score --source $src
+  if ($LASTEXITCODE -ne 0) {
+    Die @"
+Ingest failed.
+
+If this is a corporate network, the proxy is probably blocking the container even
+though your browser can reach the same URL. Offline route:
+
+  1. .\run.ps1 -DataUrls          <- prints the exact files to download
+  2. download each one in your browser into .\data\manual\
+  3. .\run.ps1 -Offline
+"@
+  }
 
   $count = docker compose exec -T postgres psql -U fantasyiq -d fantasyiq -tAc `
     "SELECT COUNT(*) FROM player_stats"
