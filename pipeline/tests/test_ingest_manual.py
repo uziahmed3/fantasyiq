@@ -145,3 +145,42 @@ def test_print_urls_lists_every_file(manual_dir, capsys):
     assert "player_stats_2024.parquet" in out
     assert "roster_2025.parquet" in out
     assert "[have]" in out and "[NEED]" in out
+
+
+def test_derive_age_from_birth_date():
+    """The roster release ships birth_date, not age - nfl_data_py used to compute this
+    for us. Regression guard for the reimplementation."""
+    rosters = pd.DataFrame(
+        [
+            {"player_id": "1", "season": 2024, "birth_date": "1999-06-16"},
+            {"player_id": "2", "season": 2024, "birth_date": "1995-01-01"},
+            {"player_id": "3", "season": 2024, "birth_date": None},
+        ]
+    )
+    out = ingest._derive_age(rosters, [2024])
+    # Measured at 1 September of the season.
+    assert out.loc[0, "age"] == pytest.approx(25.2, abs=0.2)
+    assert out.loc[1, "age"] == pytest.approx(29.7, abs=0.2)
+    assert pd.isna(out.loc[2, "age"])
+
+
+def test_derive_age_is_a_noop_when_age_present():
+    rosters = pd.DataFrame(
+        [{"player_id": "1", "season": 2024, "age": 27.0, "birth_date": "1997-01-01"}]
+    )
+    assert ingest._derive_age(rosters, [2024]).loc[0, "age"] == 27.0
+
+
+def test_derive_age_is_a_noop_without_birth_date():
+    rosters = pd.DataFrame([{"player_id": "1", "season": 2024}])
+    assert "age" not in ingest._derive_age(rosters, [2024]).columns
+
+
+def test_download_is_cached(tmp_path, monkeypatch):
+    """A re-run after a later stage fails must not re-download."""
+    dest = tmp_path / "player_stats_2024.parquet"
+    dest.write_bytes(b"already here")
+    calls = []
+    monkeypatch.setattr(ingest.urllib.request, "urlopen", lambda *a, **k: calls.append(1))
+    assert ingest._download("https://example.invalid/x.parquet", dest) == dest
+    assert calls == [], "cached file must not trigger a download"

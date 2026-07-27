@@ -361,7 +361,7 @@ for stability, smoke-tests `/health` and `/ready`, and rolls back on failure.
 
 Stated because they are the honest answers to the obvious follow-up questions:
 
-- **`is_home` is hardcoded `true`.** `nfl_data_py`'s weekly frame does not expose it; a
+- **`is_home` is hardcoded `true`.** the nflverse weekly release does not expose it; a
   schedule join would fill it properly. Defaulted rather than fabricated.
 - **`opponent_rank` in the training set is computed over the full season**, which leaks a
   little end-of-season information. The fix is an expanding season-to-date rank, at the

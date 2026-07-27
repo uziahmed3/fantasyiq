@@ -7,7 +7,12 @@ pandas==2.2.3
 scikit-learn==1.5.2
 xgboost==2.1.1
 joblib==1.4.2
+# Linux: the +cpu build only exists on download.pytorch.org (see the --extra-index-url
+# in the Dockerfile / local.py). PyPI's Linux wheel bundles CUDA and is ~2.5GB.
 torch==2.4.1+cpu ; sys_platform == "linux"
+# Windows and macOS: PyPI already ships a CPU-only wheel (~200MB), no extra index needed.
+torch==2.4.1 ; sys_platform == "win32"
+torch==2.4.1 ; sys_platform == "darwin"
 prometheus-client==0.21.0
 prometheus-fastapi-instrumentator==7.0.0
 SQLAlchemy==2.0.35

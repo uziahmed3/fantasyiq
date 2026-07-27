@@ -8,7 +8,14 @@ Two sources, in priority order:
 
   1. MANUAL_DIR (default /data/manual) - if the expected parquet files are already
      sitting there, they are used and nothing touches the network.
-  2. nflverse over HTTPS, via nfl_data_py.
+  2. The same files downloaded from the nflverse GitHub release over HTTPS.
+
+Both paths read byte-identical parquet files, so behaviour cannot diverge between them.
+
+We fetch the release assets directly rather than depending on nfl_data_py: that package
+hard-pins pandas<2.0, which conflicts with every other component here, and we use
+exactly two of its endpoints. A stdlib download plus pd.read_parquet is fewer moving
+parts than a dependency we would have to hold pandas back for.
 
 The manual path exists because corporate networks routinely allow a browser download
 while blocking the same host from inside a container - the proxy is configured in the
@@ -20,12 +27,15 @@ work offline. Same code path afterwards.
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
+import urllib.request
+from pathlib import Path
 
 import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from config import MANUAL_DIR, POSITIONS, RAW_DIR, SEASONS
+from config import DATA_DIR, MANUAL_DIR, POSITIONS, RAW_DIR, SEASONS
 from logging_setup import log
 
 WEEKLY_COLUMNS = [
@@ -46,6 +56,10 @@ WEEKLY_COLUMNS = [
 ]
 
 ROSTER_COLUMNS = ["player_id", "player_name", "position", "team", "age", "height", "weight"]
+
+# Cache for automatically downloaded release assets (distinct from MANUAL_DIR, which
+# holds files the user placed there by hand).
+DOWNLOAD_DIR = DATA_DIR / "downloads"
 
 NFLVERSE = "https://github.com/nflverse/nflverse-data/releases/download"
 WEEKLY_URL = f"{NFLVERSE}/player_stats/player_stats_{{season}}.parquet"
@@ -109,18 +123,58 @@ def _load_manual(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=20))
+def _download(url: str, dest: Path) -> Path:
+    """Fetch one nflverse parquet release asset to disk.
+
+    Downloads are cached, so a re-run after a failed later stage does not re-fetch.
+    """
+    if dest.exists() and dest.stat().st_size > 0:
+        log.debug("download_cached", file=dest.name)
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    log.info("download_start", url=url)
+    request = urllib.request.Request(url, headers={"User-Agent": "fantasyiq/1.0"})
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+    tmp.replace(dest)  # atomic: a killed download never leaves a truncated parquet
+    log.info("download_done", file=dest.name, mb=round(dest.stat().st_size / 1e6, 1))
+    return dest
+
+
 def _fetch_weekly(seasons: list[int]) -> pd.DataFrame:
-    import nfl_data_py as nfl
-
     log.info("fetch_weekly_start", seasons=seasons)
-    return nfl.import_weekly_data(seasons, downcast=True)
+    frames = [
+        pd.read_parquet(
+            _download(WEEKLY_URL.format(season=s), DOWNLOAD_DIR / f"player_stats_{s}.parquet")
+        )
+        for s in seasons
+    ]
+    return pd.concat(frames, ignore_index=True)
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=20))
 def _fetch_rosters(seasons: list[int]) -> pd.DataFrame:
-    import nfl_data_py as nfl
+    frames = [
+        pd.read_parquet(
+            _download(ROSTER_URL.format(season=s), DOWNLOAD_DIR / f"roster_{s}.parquet")
+        )
+        for s in seasons
+    ]
+    return pd.concat(frames, ignore_index=True)
 
-    return nfl.import_seasonal_rosters(seasons)
+
+def _derive_age(rosters: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
+    """The roster release ships birth_date, not age. nfl_data_py used to compute this;
+    now we do, against 1 September of the season (roughly week 1)."""
+    if "age" in rosters.columns or "birth_date" not in rosters.columns:
+        return rosters
+    out = rosters.copy()
+    season = out["season"] if "season" in out.columns else max(seasons)
+    born = pd.to_datetime(out["birth_date"], errors="coerce")
+    season_str = pd.Series(season, index=out.index).astype("Int64").astype(str)
+    start = pd.to_datetime(season_str + "-09-01", errors="coerce")
+    out["age"] = ((start - born).dt.days / 365.25).round(1)
+    return out
 
 
 def _load_network(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -175,6 +229,7 @@ def run(seasons: list[int] | None = None, source: str = "auto") -> dict[str, int
     weekly_path = RAW_DIR / "weekly.parquet"
     weekly.to_parquet(weekly_path, index=False)
 
+    rosters = _derive_age(rosters, seasons)
     roster_cols = [c for c in ROSTER_COLUMNS if c in rosters.columns]
     rosters = rosters[roster_cols]
     roster_path = RAW_DIR / "rosters.parquet"

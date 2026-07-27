@@ -27,6 +27,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -156,7 +157,31 @@ def ensure_venv(force: bool) -> None:
         ok("Created.")
 
 
-def ensure_deps(env: dict[str, str]) -> None:
+def _requirements(skip_torch: bool) -> list[Path]:
+    """The requirements files to install.
+
+    --skip-torch writes filtered copies to a temp dir rather than using a pip
+    constraints file: a constraint restricts which version may be chosen, it cannot
+    remove a requirement, so constraining torch would fail the install rather than
+    skip it.
+    """
+    if not skip_torch:
+        return REQUIREMENTS
+    tmp = Path(tempfile.mkdtemp(prefix="fantasyiq-req-"))
+    out = []
+    for req in REQUIREMENTS:
+        lines = [
+            ln
+            for ln in req.read_text().splitlines()
+            if not ln.strip().lower().startswith("torch")
+        ]
+        dest = tmp / f"{req.parent.name}.txt"
+        dest.write_text("\n".join(lines) + "\n")
+        out.append(dest)
+    return out
+
+
+def ensure_deps(env: dict[str, str], skip_torch: bool = False) -> None:
     if USING_EXTERNAL_PY:
         ok("Skipping dependency install - you supplied the interpreter.")
         return
@@ -176,19 +201,60 @@ def ensure_deps(env: dict[str, str]) -> None:
         "-m",
         "pip",
         "install",
-        # CPU-only torch: ~200MB instead of ~2.5GB of CUDA that is never used here.
+        # Linux needs this index for the CPU-only torch build; Windows and macOS get a
+        # CPU wheel straight from PyPI. Harmless on every platform.
         "--extra-index-url",
         "https://download.pytorch.org/whl/cpu",
     ]
-    for req in REQUIREMENTS:
+    for req in _requirements(skip_torch):
         cmd += ["-r", str(req)]
-    if subprocess.run([str(a) for a in cmd], cwd=str(ROOT), env=env).returncode != 0:
-        die(
-            "pip install failed.\n\n"
-            "On a corporate network this is usually the proxy. Options:\n"
-            "  set PIP_INDEX_URL to your internal PyPI mirror, or\n"
-            "  ask IT for the pip proxy settings, then re-run."
+    if skip_torch:
+        warn(
+            "Skipping PyTorch. Ridge and XGBoost still train; the bake-off drops torch_v1."
         )
+
+    # Streamed to the terminal (progress matters on a 200MB download) and captured, so
+    # the failure message can distinguish a dependency conflict from a network problem
+    # instead of guessing.
+    proc = subprocess.Popen(
+        [str(a) for a in cmd],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    captured: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        captured.append(line)
+    if proc.wait() != 0:
+        blob = "".join(captured)
+        if "ResolutionImpossible" in blob or "conflicting dependencies" in blob:
+            die(
+                "pip could not resolve the dependencies - two packages want incompatible\n"
+                "versions of the same library. The conflict is named a few lines above.\n"
+                "This is a bug in the requirements files, not your machine; please report it."
+            )
+        if (
+            "ProxyError" in blob
+            or "Tunnel connection failed" in blob
+            or "Network is" in blob
+        ):
+            die(
+                "pip could not reach the package index - this is the network, not the code.\n\n"
+                "  set PIP_INDEX_URL to your internal PyPI mirror, or\n"
+                "  ask IT for the pip proxy settings, then re-run."
+            )
+        if "torch" in blob.lower():
+            die(
+                "pip install failed while fetching PyTorch (a ~200MB download).\n\n"
+                "Skip it - the ridge and XGBoost models still train and serve:\n"
+                "  python local.py --skip-torch --demo"
+            )
+        die("pip install failed. The error is above.")
     STAMP.write_text("ok")
     ok("Dependencies installed.")
 
@@ -406,6 +472,11 @@ def main(argv: list[str] | None = None) -> int:
         "--reinstall", action="store_true", help="Rebuild the virtualenv"
     )
     parser.add_argument(
+        "--skip-torch",
+        action="store_true",
+        help="Do not install PyTorch (~200MB). Ridge and XGBoost still train.",
+    )
+    parser.add_argument(
         "--no-browser", action="store_true", help="Do not open a browser"
     )
     parser.add_argument("--api-port", type=int, default=8000)
@@ -439,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ensure_venv(args.reinstall)
     if not args.serve_only:
-        ensure_deps(env)
+        ensure_deps(env, skip_torch=args.skip_torch)
 
     if args.data_urls:
         run(
