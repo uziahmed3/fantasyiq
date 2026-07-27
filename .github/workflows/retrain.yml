@@ -1,8 +1,9 @@
 name: Retrain models
 
+# Also manual-only until AWS secrets are set - see deploy.yml.
 on:
-  schedule:
-    - cron: "0 12 * * 2" # Tuesdays, after the ETL has landed the new week
+  # schedule:
+  #   - cron: "0 12 * * 2" # Tuesdays, after the ETL has landed the new week
   workflow_dispatch:
     inputs:
       promote:

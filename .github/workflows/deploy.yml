@@ -1,9 +1,13 @@
 name: Deploy
 
+# Manual-trigger only until the AWS secrets below are configured. Once
+# AWS_DEPLOY_ROLE_ARN, PRIVATE_SUBNET_IDS, BACKEND_SG_ID, ML_SG_ID, API_BASE_URL,
+# FRONTEND_BUCKET and CLOUDFRONT_DISTRIBUTION_ID exist in repo settings, uncomment the
+# push trigger to deploy on every merge to main.
 on:
-  push:
-    branches: [main]
-    paths-ignore: ["**.md", "docs/**"]
+  # push:
+  #   branches: [main]
+  #   paths-ignore: ["**.md", "docs/**"]
   workflow_dispatch:
     inputs:
       services:
