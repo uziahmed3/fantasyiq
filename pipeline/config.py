@@ -17,6 +17,11 @@ PREDICT_BATCH_SIZE = int(os.getenv("PREDICT_BATCH_SIZE", "200"))
 
 
 def database_url() -> str:
+    # Local no-Docker mode points this at a SQLite file. The pipeline SQL is written to
+    # be portable, so nothing else changes.
+    override = os.getenv("DATABASE_URL_OVERRIDE")
+    if override:
+        return override
     return (
         f"postgresql+psycopg://{os.getenv('POSTGRES_USER', 'fantasyiq')}:"
         f"{os.getenv('POSTGRES_PASSWORD', 'change_me_locally')}@"

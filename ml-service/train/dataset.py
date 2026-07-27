@@ -42,7 +42,6 @@ WITH windowed AS (
         COUNT(ps.id)           OVER season_to_date AS games_played
     FROM player_stats ps
     JOIN players p ON p.id = ps.player_id
-    WHERE (:positions = '' OR p.position = ANY(string_to_array(:positions, ',')))
     WINDOW
         w AS (
             PARTITION BY ps.player_id, ps.season ORDER BY ps.week
@@ -60,6 +59,11 @@ ORDER BY season, week, player_id
 
 
 def _database_url() -> str:
+    # Local no-Docker mode sets this to a SQLite file; everything else builds a
+    # Postgres URL from the standard env vars.
+    override = os.getenv("DATABASE_URL_OVERRIDE")
+    if override:
+        return override
     return (
         f"postgresql+psycopg://{os.getenv('POSTGRES_USER', 'fantasyiq')}:"
         f"{os.getenv('POSTGRES_PASSWORD', 'change_me_locally')}@"
@@ -90,12 +94,22 @@ def _add_opponent_rank(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_from_db(positions: str | None = None) -> pd.DataFrame:
+    """Postgres in Docker/AWS, SQLite in local no-Docker mode - same SQL either way.
+
+    The position filter is applied in pandas rather than SQL because the Postgres
+    idiom for it (`= ANY(string_to_array(...))`) has no SQLite equivalent, and the
+    row count here is small enough that filtering after the fact costs nothing.
+    """
     engine = create_engine(_database_url(), pool_pre_ping=True)
     positions = positions if positions is not None else os.getenv("INGEST_POSITIONS", "WR,RB,TE")
     with engine.connect() as conn:
-        df = pd.read_sql(FEATURE_SQL, conn, params={"positions": positions or ""})
+        df = pd.read_sql(FEATURE_SQL, conn)
     engine.dispose()
-    return df
+
+    wanted = [p.strip().upper() for p in (positions or "").split(",") if p.strip()]
+    if wanted and "position" in df.columns:
+        df = df[df["position"].str.upper().isin(wanted)]
+    return df.reset_index(drop=True)
 
 
 def make_synthetic(n_players: int = 220, weeks: int = 17, seed: int = 7) -> pd.DataFrame:
@@ -156,14 +170,14 @@ def make_synthetic(n_players: int = 220, weeks: int = 17, seed: int = 7) -> pd.D
 
 
 def load_dataset(allow_synthetic: bool = True) -> tuple[pd.DataFrame, str]:
-    """Postgres if reachable and populated, otherwise synthetic. Returns (df, source)."""
+    """Real database if reachable and populated, otherwise synthetic. Returns (df, source)."""
     try:
         df = load_from_db()
         if len(df) >= 500:
-            return _finalise(df), "postgres"
-        print(f"[dataset] only {len(df)} rows in Postgres - falling back to synthetic")
+            return _finalise(df), "database"
+        print(f"[dataset] only {len(df)} rows in the database - falling back to synthetic")
     except Exception as exc:  # noqa: BLE001
-        print(f"[dataset] Postgres unavailable ({type(exc).__name__}: {exc}) - using synthetic")
+        print(f"[dataset] database unavailable ({type(exc).__name__}: {exc}) - using synthetic")
     if not allow_synthetic:
         raise RuntimeError("no training data available")
     return _finalise(make_synthetic()), "synthetic"

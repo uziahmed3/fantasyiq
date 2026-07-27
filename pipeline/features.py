@@ -30,6 +30,9 @@ FEATURE_ORDER = (
 )
 
 # Same window semantics as ml-service/train/dataset.py: strictly prior weeks only.
+# Portable SQL: no LEAST/GREATEST, no Postgres-only functions, so this runs unchanged
+# against SQLite in local no-Docker mode. FILTER and window functions are supported by
+# SQLite 3.30+ (shipped with every current Python) and by Postgres.
 UPCOMING_FEATURES_SQL = text("""
 WITH ranked AS (
     SELECT
@@ -72,7 +75,8 @@ SELECT
     COALESCE(r.fantasy_points_last_1, 0) AS fantasy_points_last_1,
     COALESCE(r.season_avg_points, 0)     AS season_avg_points,
     COALESCE(r.games_played, 0)          AS games_played,
-    LEAST(GREATEST(COALESCE(d.opponent_rank, 16), 1), 32) AS opponent_rank,
+    -- clamped to 1..32 in pandas: LEAST/GREATEST do not exist in SQLite
+    COALESCE(d.opponent_rank, 16)        AS opponent_rank,
     1 AS is_home
 FROM players p
 JOIN rolling r ON r.player_id = p.id
@@ -88,7 +92,9 @@ def build_upcoming(engine: Engine, season: int, week: int) -> pd.DataFrame:
     for col in FEATURE_ORDER:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df["games_played"] = df["games_played"].astype(int)
-    df["opponent_rank"] = df["opponent_rank"].astype(int)
+    # Clamp here rather than in SQL: LEAST/GREATEST do not exist in SQLite, and the
+    # ML service rejects opponent_rank outside 1..32 at the contract boundary.
+    df["opponent_rank"] = df["opponent_rank"].clip(1, 32).astype(int)
     df["is_home"] = df["is_home"].astype(int)
     log.info("features_built", season=season, week=week, players=len(df))
     return df

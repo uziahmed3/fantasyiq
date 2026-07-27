@@ -1,11 +1,13 @@
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import text
 
@@ -75,9 +77,41 @@ Instrumentator(
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
+# ---------------------------------------------------------------- built-in dashboard
+# Served straight off disk with no build step, so `run-local.ps1` produces a real UI on
+# a machine that has only Python. The React app in frontend/ is the production front
+# end; both talk to this same API.
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.is_dir():
+    app.mount("/app", StaticFiles(directory=STATIC_DIR, html=True), name="dashboard")
+
+    @app.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        return RedirectResponse(url="/app/")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)
+
+
 @app.get("/health", tags=["ops"], summary="Liveness probe")
 def health() -> dict:
     return {"status": "ok", "environment": settings.environment}
+
+
+@app.get("/info", tags=["ops"], summary="What this instance is actually running")
+def info() -> dict:
+    """Handy when the same code runs on SQLite+memory-cache locally and
+    Postgres+ElastiCache in AWS - one call says which."""
+    from app.core.cache import backend_name
+
+    return {
+        "environment": settings.environment,
+        "database": "sqlite" if settings.database_url.startswith("sqlite") else "postgresql",
+        "cache_backend": backend_name(),
+        "active_model_version": settings.active_model_version,
+        "ml_service_url": settings.ml_service_url,
+    }
 
 
 @app.get("/ready", tags=["ops"], summary="Readiness probe (checks dependencies)")
@@ -89,6 +123,9 @@ def ready() -> JSONResponse:
         checks["database"] = True
     except Exception as exc:  # noqa: BLE001
         logger.warning("readiness_db_failed", error=str(exc))
-    checks["ml_service"] = ml_client.health()
+    try:
+        checks["ml_service"] = ml_client.health()
+    except Exception as exc:  # noqa: BLE001 - readiness reports, it does not raise
+        logger.warning("readiness_ml_failed", error=str(exc))
     ok = all(checks.values())
     return JSONResponse(status_code=200 if ok else 503, content={"ready": ok, "checks": checks})

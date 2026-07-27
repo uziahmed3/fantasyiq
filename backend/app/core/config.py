@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # ML service
     ml_service_url: str = "http://localhost:9000"
     ml_service_timeout_seconds: float = 5.0
+    # httpx honours HTTP_PROXY/ALL_PROXY by default. Calls to the ML service are always
+    # internal (localhost or private VPC DNS), so an outbound proxy is never right and on
+    # a corporate machine it breaks every prediction. Off by default; opt in if needed.
+    ml_service_trust_env: bool = False
     active_model_version: str = "xgboost_v1"
 
     cors_origins: str = "http://localhost:5173,http://localhost:3000"

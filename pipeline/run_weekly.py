@@ -40,12 +40,17 @@ def _bust_prediction_cache() -> int:
     Cache invalidation lives with the writer, not the reader - the reader has no way to
     know a batch job ran.
     """
+    url = os.getenv("REDIS_URL", "redis://redis:6379/0").strip()
+    if not url or url.startswith("memory://"):
+        # Local no-Docker mode: the API's cache lives in the API process, so a separate
+        # pipeline process cannot reach it. Entries age out via TTL instead. Not a
+        # problem worth solving - with a shared Redis (Docker/AWS) this branch is dead.
+        log.info("cache_bust_skipped", reason="in-process cache; entries expire by TTL")
+        return 0
     try:
         import redis
 
-        client = redis.from_url(
-            os.getenv("REDIS_URL", "redis://redis:6379/0"), socket_timeout=2, decode_responses=True
-        )
+        client = redis.from_url(url, socket_timeout=2, decode_responses=True)
         deleted = 0
         for pattern in ("pred:v1:*", "rank:v1:*"):
             for key in client.scan_iter(match=pattern, count=500):
@@ -69,27 +74,40 @@ def main(argv: list[str] | None = None) -> int:
         help="Where ingest gets its data: auto (default), manual (./data/manual), or network",
     )
     parser.add_argument("--skip-score", action="store_true", help="ETL only, no predictions")
+    parser.add_argument(
+        "--score-only",
+        action="store_true",
+        help="Skip the whole ETL and just regenerate projections from what is already "
+        "in the database (used after a demo seed, or to re-score with a new model)",
+    )
     args = parser.parse_args(argv)
+
+    if args.score_only and args.skip_score:
+        parser.error("--score-only and --skip-score are contradictory")
 
     started = time.perf_counter()
     stats: dict[str, int] = {}
 
     try:
-        if args.skip_ingest:
-            log.info("stage_skipped", stage="ingest")
-        else:
-            log.info("stage_start", stage="ingest")
-            stats |= ingest.run([args.season], source=args.source)
-
-        log.info("stage_start", stage="clean")
-        stats |= clean.run()
-
-        log.info("stage_start", stage="load")
         engine = load.get_engine()
-        weekly = pd.read_parquet(CLEAN_DIR / "weekly.parquet")
-        rosters = pd.read_parquet(CLEAN_DIR / "rosters.parquet")
-        id_map = load.upsert_players(engine, weekly, rosters)
-        stats["stats_rows"] = load.upsert_stats(engine, weekly, id_map)
+
+        if args.score_only:
+            log.info("stage_skipped", stage="etl", reason="score-only")
+        else:
+            if args.skip_ingest:
+                log.info("stage_skipped", stage="ingest")
+            else:
+                log.info("stage_start", stage="ingest")
+                stats |= ingest.run([args.season], source=args.source)
+
+            log.info("stage_start", stage="clean")
+            stats |= clean.run()
+
+            log.info("stage_start", stage="load")
+            weekly = pd.read_parquet(CLEAN_DIR / "weekly.parquet")
+            rosters = pd.read_parquet(CLEAN_DIR / "rosters.parquet")
+            id_map = load.upsert_players(engine, weekly, rosters)
+            stats["stats_rows"] = load.upsert_stats(engine, weekly, id_map)
 
         if not args.skip_score:
             week = args.week or _next_week(engine, args.season)

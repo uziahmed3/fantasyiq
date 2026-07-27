@@ -37,6 +37,40 @@ and monitoring with alerts.
 
 ## Run it
 
+Two ways. Pick based on whether you can run Docker.
+
+### No Docker — Python only
+
+Needs nothing but Python 3.9+. No Postgres, no Redis, no Node, no admin rights.
+
+```powershell
+.\run-local.ps1           # setup, load real NFL data, train, serve
+.\run-local.ps1 -Demo     # synthetic data, zero network, ~2 minutes
+```
+
+Dashboard at **http://localhost:8000/app/**, API docs at `/docs`.
+
+Same application code as the Docker stack, with two substitutions selected by
+configuration rather than a code fork:
+
+| | Docker / AWS | Local |
+| --- | --- | --- |
+| Database | Postgres 16 | SQLite file (`fantasyiq.db`) |
+| Cache | Redis / ElastiCache | in-process TTL cache |
+| Front end | React + Vite (nginx) | zero-build HTML served at `/app` |
+
+`GET /info` reports which combination is live. The pipeline SQL is written to standard
+SQL — `CURRENT_TIMESTAMP` not `NOW()`, no `LEAST`/`GREATEST`, no `string_to_array` — so
+the identical upsert and window-function queries run on both engines.
+
+```powershell
+.\run-local.ps1 -Reset      # wipe the database and models
+.\run-local.ps1 -ServeOnly  # skip setup, just start the servers
+.\run-local.ps1 -SkipTrain  # data only, no training
+```
+
+### With Docker
+
 Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) running.
 
 **Windows (PowerShell)** — one command does everything: build, boot, pull real NFL data,

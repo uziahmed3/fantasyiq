@@ -6,6 +6,10 @@ because it will be re-run (retries, backfills, someone fixing a bug on a Tuesday
 
 Mechanism: INSERT ... ON CONFLICT DO UPDATE against the natural keys
 (players.external_id, player_stats(player_id, season, week)).
+
+The SQL is deliberately standard rather than Postgres-flavoured (CURRENT_TIMESTAMP, not
+NOW(); no LEAST/GREATEST) so the identical statements run against SQLite in local
+no-Docker mode. SQLite has supported upsert since 3.24 and window functions since 3.25.
 """
 
 from __future__ import annotations
@@ -22,7 +26,8 @@ from logging_setup import log
 UPSERT_PLAYER = text("""
 INSERT INTO players (external_id, name, team, position, age, height_inches, weight_lbs,
                      created_at, updated_at)
-VALUES (:external_id, :name, :team, :position, :age, :height_inches, :weight_lbs, NOW(), NOW())
+VALUES (:external_id, :name, :team, :position, :age, :height_inches, :weight_lbs,
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (external_id) DO UPDATE SET
     name          = EXCLUDED.name,
     team          = EXCLUDED.team,
@@ -30,7 +35,7 @@ ON CONFLICT (external_id) DO UPDATE SET
     age           = COALESCE(EXCLUDED.age, players.age),
     height_inches = COALESCE(EXCLUDED.height_inches, players.height_inches),
     weight_lbs    = COALESCE(EXCLUDED.weight_lbs, players.weight_lbs),
-    updated_at    = NOW()
+    updated_at    = CURRENT_TIMESTAMP
 RETURNING id
 """)
 
@@ -38,7 +43,7 @@ UPSERT_STATS = text("""
 INSERT INTO player_stats (player_id, season, week, opponent, is_home, targets, receptions,
                           yards, touchdowns, fantasy_points, created_at, updated_at)
 VALUES (:player_id, :season, :week, :opponent, :is_home, :targets, :receptions,
-        :yards, :touchdowns, :fantasy_points, NOW(), NOW())
+        :yards, :touchdowns, :fantasy_points, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (player_id, season, week) DO UPDATE SET
     opponent       = EXCLUDED.opponent,
     is_home        = EXCLUDED.is_home,
@@ -47,13 +52,14 @@ ON CONFLICT (player_id, season, week) DO UPDATE SET
     yards          = EXCLUDED.yards,
     touchdowns     = EXCLUDED.touchdowns,
     fantasy_points = EXCLUDED.fantasy_points,
-    updated_at     = NOW()
+    updated_at     = CURRENT_TIMESTAMP
 """)
 
 INSERT_PREDICTION = text("""
 INSERT INTO predictions (player_id, season, week, opponent, prediction, confidence,
                          model_version, created_at)
-VALUES (:player_id, :season, :week, :opponent, :prediction, :confidence, :model_version, NOW())
+VALUES (:player_id, :season, :week, :opponent, :prediction, :confidence, :model_version,
+        CURRENT_TIMESTAMP)
 """)
 
 
