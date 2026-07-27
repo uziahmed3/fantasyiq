@@ -37,6 +37,24 @@ and monitoring with alerts.
 
 ## Run it
 
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) running.
+
+**Windows (PowerShell)** — one command does everything: build, boot, pull real NFL data,
+train all three models, print the accuracy comparison, generate projections.
+
+```powershell
+.\run.ps1
+```
+
+```powershell
+.\run.ps1 -Seasons 2025    # one season only (faster first run)
+.\run.ps1 -Stop            # shut down
+.\run.ps1 -Logs            # tail API + ML logs
+.\run.ps1 -Nuke            # shut down and wipe all data
+```
+
+**macOS / Linux**
+
 ```bash
 cp .env.example .env
 make up        # postgres, redis, ml-service, backend, frontend, prometheus, grafana
@@ -44,6 +62,9 @@ make ingest    # pull real NFL data, load Postgres, generate weekly projections
 make train     # ridge / XGBoost / PyTorch bake-off, writes versioned artifacts
 make test      # backend + ml-service + pipeline test suites
 ```
+
+First run pulls ~2GB of base images and a few hundred MB of NFL data — budget 10-15
+minutes. After that, `docker compose up -d` is seconds.
 
 | Surface | URL |
 | --- | --- |
