@@ -25,6 +25,27 @@ from config import CLEAN_DIR, SEASONS
 from logging_setup import log
 
 
+def _resolve_season(engine, requested: int | None) -> int:
+    """Which season to project.
+
+    An explicit --season always wins. Otherwise use the newest season that actually has
+    rows, not the newest season in INGEST_SEASONS - those differ whenever the configured
+    range runs ahead of the data (a season that has not started, or a demo seed of an
+    earlier year), and silently projecting an empty season yields zero predictions with
+    no error.
+    """
+    if requested is not None:
+        return requested
+    with engine.connect() as conn:
+        latest = conn.execute(text("SELECT MAX(season) FROM player_stats")).scalar()
+    if latest is None:
+        log.warning("no_stats_rows", fallback=max(SEASONS))
+        return max(SEASONS)
+    if int(latest) != max(SEASONS):
+        log.info("season_resolved_from_data", configured=max(SEASONS), using=int(latest))
+    return int(latest)
+
+
 def _next_week(engine, season: int) -> int:
     with engine.connect() as conn:
         latest = conn.execute(
@@ -64,7 +85,12 @@ def _bust_prediction_cache() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="FantasyIQ weekly ETL + scoring run")
-    parser.add_argument("--season", type=int, default=max(SEASONS))
+    parser.add_argument(
+        "--season",
+        type=int,
+        default=None,
+        help="Season to project (default: the newest season present in the database)",
+    )
     parser.add_argument("--week", type=int, default=None, help="Week to project (default: next)")
     parser.add_argument("--skip-ingest", action="store_true", help="Reuse the raw parquet on disk")
     parser.add_argument(
@@ -98,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 log.info("stage_skipped", stage="ingest")
             else:
                 log.info("stage_start", stage="ingest")
-                stats |= ingest.run([args.season], source=args.source)
+                stats |= ingest.run([args.season] if args.season else None, source=args.source)
 
             log.info("stage_start", stage="clean")
             stats |= clean.run()
@@ -110,10 +136,18 @@ def main(argv: list[str] | None = None) -> int:
             stats["stats_rows"] = load.upsert_stats(engine, weekly, id_map)
 
         if not args.skip_score:
-            week = args.week or _next_week(engine, args.season)
-            log.info("stage_start", stage="features", season=args.season, week=week)
-            frame = features_mod.build_upcoming(engine, args.season, week)
-            rows = features_mod.score_upcoming(frame, args.season, week)
+            season = _resolve_season(engine, args.season)
+            week = args.week or _next_week(engine, season)
+            log.info("stage_start", stage="features", season=season, week=week)
+            frame = features_mod.build_upcoming(engine, season, week)
+            if frame.empty:
+                log.warning(
+                    "no_features",
+                    season=season,
+                    week=week,
+                    hint="no player has a prior week in this season - nothing to project",
+                )
+            rows = features_mod.score_upcoming(frame, season, week)
             stats["predictions"] = load.insert_predictions(engine, rows)
             _bust_prediction_cache()
 

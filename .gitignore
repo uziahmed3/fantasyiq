@@ -26,3 +26,9 @@ data/processed/
 # Hand-downloaded NFL data (see data/manual/README.md)
 data/manual/*
 !data/manual/README.md
+
+# Local no-Docker mode
+.venv/
+fantasyiq.db
+.models/
+.pipeline-data/

@@ -43,10 +43,13 @@ Two ways. Pick based on whether you can run Docker.
 
 Needs nothing but Python 3.9+. No Postgres, no Redis, no Node, no admin rights.
 
-```powershell
-.\run-local.ps1           # setup, load real NFL data, train, serve
-.\run-local.ps1 -Demo     # synthetic data, zero network, ~2 minutes
+```bash
+python local.py --demo     # synthetic data, zero network, fastest way to see it work
+python local.py            # real NFL data
+python local.py --help     # everything else
 ```
+
+(`run-local.ps1` and `run-local.sh` are one-line wrappers around the same script.)
 
 Dashboard at **http://localhost:8000/app/**, API docs at `/docs`.
 
@@ -63,11 +66,17 @@ configuration rather than a code fork:
 SQL — `CURRENT_TIMESTAMP` not `NOW()`, no `LEAST`/`GREATEST`, no `string_to_array` — so
 the identical upsert and window-function queries run on both engines.
 
-```powershell
-.\run-local.ps1 -Reset      # wipe the database and models
-.\run-local.ps1 -ServeOnly  # skip setup, just start the servers
-.\run-local.ps1 -SkipTrain  # data only, no training
+```bash
+python local.py --reset        # wipe the database and models
+python local.py --serve-only   # skip setup, just start the servers
+python local.py --data-urls    # list files to download by hand
+python local.py --offline      # use files already in data/manual/
 ```
+
+The runner is Python rather than a shell script on purpose: it is the entry point
+everything else depends on, and Python is the one language guaranteed to be present
+and testable on every platform. A PowerShell script cannot be exercised from a Linux
+CI runner; this can.
 
 ### With Docker
 
