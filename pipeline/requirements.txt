@@ -1,0 +1,10 @@
+nfl_data_py==0.3.3
+pandas==2.2.3
+numpy==1.26.4
+pyarrow==17.0.0
+SQLAlchemy==2.0.35
+psycopg[binary]==3.2.2
+httpx==0.27.2
+structlog==24.4.0
+prometheus-client==0.21.0
+tenacity==9.0.0

@@ -1,0 +1,58 @@
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class PlayerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    team: str | None = None
+    position: str
+    age: int | None = None
+
+
+class PlayerDetailOut(PlayerOut):
+    height_inches: int | None = None
+    weight_lbs: int | None = None
+    external_id: str | None = None
+
+
+class PlayerStatsOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    season: int
+    week: int
+    opponent: str | None = None
+    is_home: bool
+    targets: int
+    receptions: int
+    yards: float
+    touchdowns: int
+    fantasy_points: float
+
+
+class RankingRow(BaseModel):
+    rank: int
+    player_id: int
+    name: str
+    team: str | None = None
+    position: str
+    projected_points: float = Field(..., description="Model projection for the requested week")
+    confidence: float | None = None
+
+
+class RankingsOut(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    season: int
+    week: int
+    position: str
+    model_version: str
+    rankings: list[RankingRow]
+
+
+class PaginatedPlayers(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[PlayerOut]

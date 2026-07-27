@@ -1,0 +1,198 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Comma-separated services to deploy (default: all)"
+        default: "backend,ml-service,pipeline,frontend"
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false # never interrupt a deploy mid-rollout
+
+permissions:
+  id-token: write # OIDC: no long-lived AWS keys in GitHub secrets
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER: fantasyiq-prod
+  PROJECT: fantasyiq
+
+jobs:
+  build-and-push:
+    name: Build & push images
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    strategy:
+      matrix:
+        service: [backend, ml-service, pipeline]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive immutable tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build & push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          push: true
+          provenance: false
+          # Immutable SHA tag is what gets deployed; :latest is only a convenience pointer.
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ env.PROJECT }}/${{ matrix.service }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.ecr.outputs.registry }}/${{ env.PROJECT }}/${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  migrate:
+    name: Run DB migrations
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Migrations run as a one-off task inside the VPC, before the new app code rolls
+      # out. Ordering matters: additive-only migrations mean the old and new versions can
+      # both run against the new schema during the rollout.
+      - name: One-off ECS task -> alembic upgrade head
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "$CLUSTER-backend" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.PRIVATE_SUBNET_IDS }}],securityGroups=[${{ secrets.BACKEND_SG_ID }}],assignPublicIp=DISABLED}" \
+            --overrides '{"containerOverrides":[{"name":"backend","command":["alembic","upgrade","head"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+          echo "migration task: $TASK_ARN"
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+          EXIT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          test "$EXIT" = "0" || (echo "::error::migration exited $EXIT" && exit 1)
+
+  deploy-services:
+    name: Roll out ECS services
+    runs-on: ubuntu-latest
+    needs: [build-and-push, migrate]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Register new task definitions and update services
+        env:
+          TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          # ML service first: the backend tolerates an old ML version, but a new backend
+          # calling a missing ML endpoint would 503.
+          for pair in "ml:ml-service" "backend:backend"; do
+            SVC="${pair%%:*}"; IMG="${pair##*:}"
+            FAMILY="$CLUSTER-$SVC"
+            REGISTRY="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com"
+
+            aws ecs describe-task-definition --task-definition "$FAMILY" \
+              --query 'taskDefinition' > td.json
+            jq --arg img "$REGISTRY/$PROJECT/$IMG:$TAG" '
+              .containerDefinitions[0].image = $img
+              | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                    .compatibilities, .registeredAt, .registeredBy)
+            ' td.json > new-td.json
+
+            NEW_ARN=$(aws ecs register-task-definition --cli-input-json file://new-td.json \
+              --query 'taskDefinition.taskDefinitionArn' --output text)
+            echo "registered $NEW_ARN"
+
+            aws ecs update-service --cluster "$CLUSTER" --service "$FAMILY" \
+              --task-definition "$NEW_ARN" > /dev/null
+          done
+
+      - name: Wait for both services to stabilise
+        run: |
+          aws ecs wait services-stable --cluster "$CLUSTER" \
+            --services "$CLUSTER-ml" "$CLUSTER-backend"
+
+      - name: Smoke test the deployed API
+        run: |
+          API="${{ secrets.API_BASE_URL }}"
+          curl -fsS --retry 6 --retry-delay 5 --retry-all-errors "$API/health"
+          curl -fsS "$API/ready" | tee /dev/stderr | grep -q '"ready":true'
+
+      - name: Roll back on failure
+        if: failure()
+        run: |
+          # The ECS deployment circuit breaker handles a task that never goes healthy.
+          # This covers the case where tasks are healthy but the smoke test fails.
+          for SVC in ml backend; do
+            PREV=$(aws ecs describe-task-definition \
+              --task-definition "$CLUSTER-$SVC" \
+              --query 'taskDefinition.revision' --output text)
+            aws ecs update-service --cluster "$CLUSTER" --service "$CLUSTER-$SVC" \
+              --task-definition "$CLUSTER-$SVC:$((PREV - 1))" > /dev/null
+          done
+          echo "::error::Smoke test failed - rolled back to the previous revision"
+
+  deploy-frontend:
+    name: Deploy dashboard
+    runs-on: ubuntu-latest
+    needs: deploy-services
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package.json
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: /api/v1
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Sync to S3
+        run: |
+          # Hashed assets first with a long TTL, then index.html with no-cache. In that
+          # order a client never fetches a new index.html pointing at assets that are
+          # not uploaded yet.
+          aws s3 sync frontend/dist s3://${{ secrets.FRONTEND_BUCKET }} \
+            --delete --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp frontend/dist/index.html s3://${{ secrets.FRONTEND_BUCKET }}/index.html \
+            --cache-control "no-store,must-revalidate"
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/index.html" "/"

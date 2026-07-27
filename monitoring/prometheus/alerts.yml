@@ -1,0 +1,48 @@
+groups:
+  - name: fantasyiq-api
+    rules:
+      # Symptom-based alerts (what users feel), not cause-based (CPU is high).
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 0.001) > 0.02
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "5xx rate above 2% for 5 minutes"
+          description: "Check /ready - a failing dependency surfaces as 503 from /predict."
+
+      - alert: SlowP95Latency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 0.5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 API latency above 500ms"
+
+      - alert: PredictionFailuresSpiking
+        expr: sum(rate(fantasyiq_prediction_failures_total[5m])) > 0.2
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Prediction failures - ML service likely unreachable or timing out"
+
+      - alert: CacheHitRateCollapsed
+        expr: |
+          sum(rate(fantasyiq_cache_events_total{result="hit"}[15m]))
+            / clamp_min(sum(rate(fantasyiq_cache_events_total{result=~"hit|miss"}[15m])), 0.001)
+            < 0.5
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Cache hit rate below 50% - Redis evicting, or keys changed shape"
+
+      - alert: MLServiceLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(fantasyiq_ml_service_latency_seconds_bucket[5m])) by (le)) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Downstream inference p95 above 1s"

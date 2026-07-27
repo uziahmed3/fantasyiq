@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install ruff==0.6.9
+      - run: ruff check backend ml-service pipeline loadtest
+      - run: ruff format --check backend ml-service pipeline loadtest
+
+  test-backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r backend/requirements-dev.txt
+      - name: pytest
+        working-directory: backend
+        env:
+          DATABASE_URL_OVERRIDE: "sqlite+pysqlite:///:memory:"
+          JWT_SECRET_KEY: ci-secret
+        run: pytest -q --cov=app --cov-report=term-missing --cov-fail-under=75
+
+  test-ml:
+    name: ML service tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install (CPU torch only)
+        run: |
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            -r ml-service/requirements-dev.txt
+      - name: pytest
+        working-directory: ml-service
+        env:
+          MODEL_DIR: /tmp/models
+        run: pytest -q
+
+  test-pipeline:
+    name: Pipeline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r pipeline/requirements-dev.txt
+      - name: pytest
+        working-directory: pipeline
+        run: pytest -q
+
+  integration:
+    name: Integration (real Postgres + Redis)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fantasyiq
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: fantasyiq
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fantasyiq"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_USER: fantasyiq
+      POSTGRES_PASSWORD: ci_password
+      POSTGRES_DB: fantasyiq
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET_KEY: ci-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r backend/requirements-dev.txt
+      - name: Migrations apply cleanly (and are reversible)
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+      - name: Schema matches the models (no drift)
+        working-directory: backend
+        run: |
+          # An empty autogenerate diff proves the migrations and the ORM agree.
+          alembic revision --autogenerate -m drift-check --rev-id drift 2>/dev/null
+          if grep -qE "op\.(create|drop|add|alter)_" alembic/versions/drift_drift_check.py; then
+            echo "::error::Migrations are out of sync with the SQLAlchemy models"
+            cat alembic/versions/drift_drift_check.py
+            exit 1
+          fi
+          rm alembic/versions/drift_drift_check.py
+
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: fmt
+        run: terraform -chdir=infra/terraform fmt -check -recursive
+      - name: validate
+        run: |
+          terraform -chdir=infra/terraform init -backend=false
+          terraform -chdir=infra/terraform validate
+
+  docker-build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, ml-service, pipeline, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          push: false
+          load: true
+          tags: fantasyiq/${{ matrix.service }}:ci
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  compose-smoke:
+    name: Compose smoke test
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-ml]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bring the stack up
+        run: |
+          cp .env.example .env
+          docker compose up -d --build postgres redis ml-service backend
+      - name: Wait for readiness
+        run: |
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost:8000/health > /dev/null; then
+              echo "backend healthy after ${i}s"; break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:8000/health
+          curl -fsS http://localhost:9000/health
+      - name: Exercise the API end to end
+        run: |
+          # Empty DB, so a prediction must 404 rather than 500 - proves error handling
+          # survives the container boundary.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            http://localhost:8000/api/v1/predict \
+            -H 'Content-Type: application/json' \
+            -d '{"player_id":1,"week":5,"season":2023,"opponent":"GB"}')
+          test "$code" = "404" || (echo "expected 404, got $code" && exit 1)
+          curl -fsS 'http://localhost:8000/api/v1/rankings?week=5&position=WR' > /dev/null
+          curl -fsS http://localhost:8000/openapi.json | head -c 200
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail 200
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
