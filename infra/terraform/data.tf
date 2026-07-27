@@ -123,8 +123,8 @@ resource "aws_elasticache_replication_group" "main" {
   num_cache_clusters         = var.environment == "prod" ? 2 : 1
   automatic_failover_enabled = var.environment == "prod"
 
-  subnet_group_name  = aws_elasticache_subnet_group.main.name
-  security_group_ids = [aws_security_group.redis.id]
+  subnet_group_name    = aws_elasticache_subnet_group.main.name
+  security_group_ids   = [aws_security_group.redis.id]
   parameter_group_name = aws_elasticache_parameter_group.main.name
 
   at_rest_encryption_enabled = true

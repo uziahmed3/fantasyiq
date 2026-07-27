@@ -31,7 +31,7 @@ resource "aws_ecs_cluster" "main" {
 }
 
 resource "aws_ecs_cluster_capacity_providers" "main" {
-  cluster_name = aws_ecs_cluster.main.name
+  cluster_name       = aws_ecs_cluster.main.name
   capacity_providers = ["FARGATE", "FARGATE_SPOT"]
 
   default_capacity_provider_strategy {
@@ -105,13 +105,13 @@ resource "aws_ecs_task_definition" "ml" {
   }
 
   container_definitions = jsonencode([{
-    name      = "ml-service"
-    image     = "${local.registry}/${var.project}/ml-service:latest"
-    essential = true
+    name         = "ml-service"
+    image        = "${local.registry}/${var.project}/ml-service:latest"
+    essential    = true
     portMappings = [{ containerPort = 9000, protocol = "tcp" }]
-    environment = concat(local.common_env, [{ name = "MODEL_DIR", value = "/models" }])
-    secrets     = local.common_secrets
-    mountPoints = [{ sourceVolume = "models", containerPath = "/models", readOnly = false }]
+    environment  = concat(local.common_env, [{ name = "MODEL_DIR", value = "/models" }])
+    secrets      = local.common_secrets
+    mountPoints  = [{ sourceVolume = "models", containerPath = "/models", readOnly = false }]
     healthCheck = {
       command     = ["CMD-SHELL", "curl -fsS http://localhost:9000/health || exit 1"]
       interval    = 30
@@ -172,9 +172,9 @@ resource "aws_ecs_task_definition" "backend" {
   task_role_arn            = aws_iam_role.task.arn
 
   container_definitions = jsonencode([{
-    name      = "backend"
-    image     = "${local.registry}/${var.project}/backend:latest"
-    essential = true
+    name         = "backend"
+    image        = "${local.registry}/${var.project}/backend:latest"
+    essential    = true
     portMappings = [{ containerPort = 8000, protocol = "tcp" }]
     environment = concat(local.common_env, [
       { name = "ML_SERVICE_URL", value = "http://ml.${var.project}.internal:9000" },
@@ -206,8 +206,8 @@ resource "aws_ecs_service" "backend" {
   desired_count   = var.backend_desired_count
   launch_type     = "FARGATE"
 
-  enable_execute_command             = true
-  health_check_grace_period_seconds  = 45
+  enable_execute_command            = true
+  health_check_grace_period_seconds = 45
 
   network_configuration {
     subnets          = aws_subnet.private[*].id
