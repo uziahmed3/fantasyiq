@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Separate knob: the preseason model is trained on different data and is promoted
     # independently of the in-season one.
     active_preseason_model_version: str = "preseason_v1"
+    # Season totals are a per-game rate times this. Stated in the API response so a
+    # caller never has to guess what the extrapolation assumed.
+    games_per_season: int = 17
 
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 

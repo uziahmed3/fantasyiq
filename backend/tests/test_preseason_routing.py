@@ -141,3 +141,89 @@ def test_api_reports_mode_and_basis(client, rookie):
     assert body["mode"] == "preseason"
     assert body["basis"]
     assert body["confidence"] == pytest.approx(0.35), "rookie confidence must be low"
+
+
+# ---------------------------------------------------------------- draft board
+def test_season_board_ranks_and_extrapolates(client, db_session, seed):
+    """The draft board reads week-0 rows and turns a per-game rate into a season total."""
+    from app.models import Prediction
+
+    for pid, ppg in ((15, 18.0), (16, 12.0)):
+        db_session.add(
+            Prediction(
+                player_id=pid,
+                season=2024,
+                week=0,
+                opponent="MIN",
+                prediction=ppg,
+                confidence=0.7,
+                model_version="preseason_v1",
+            )
+        )
+    db_session.commit()
+
+    r = client.get("/api/v1/rankings/season?season=2024&position=WR&limit=10")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["games_assumed"] == 17
+    assert [row["name"] for row in body["rankings"]] == [
+        "Justin Jefferson",
+        "Ja'Marr Chase",
+    ]
+    top = body["rankings"][0]
+    assert top["projected_points_per_game"] == 18.0
+    assert top["projected_season_points"] == pytest.approx(18.0 * 17, abs=0.1)
+
+
+def test_season_board_reports_whether_the_season_started(client, db_session, seed):
+    """The UI switches between draft board and weekly view off this flag rather than a
+    hardcoded date."""
+    from app.models import Prediction
+
+    # 2023 has games in the seed fixture; 2026 does not.
+    for season in (2023, 2026):
+        db_session.add(
+            Prediction(
+                player_id=15,
+                season=season,
+                week=0,
+                opponent="MIN",
+                prediction=15.0,
+                confidence=0.6,
+                model_version="preseason_v1",
+            )
+        )
+    db_session.commit()
+
+    started = client.get("/api/v1/rankings/season?season=2023&position=WR").json()
+    upcoming = client.get("/api/v1/rankings/season?season=2026&position=WR").json()
+    assert started["season_started"] is True
+    assert upcoming["season_started"] is False
+
+
+def test_season_board_flags_rookies_and_explains_the_basis(client, db_session, rookie):
+    from app.models import Prediction
+
+    db_session.add(
+        Prediction(
+            player_id=rookie.id,
+            season=2023,
+            week=0,
+            opponent="LV",
+            prediction=8.0,
+            confidence=0.3,
+            model_version="preseason_v1",
+        )
+    )
+    db_session.commit()
+
+    body = client.get("/api/v1/rankings/season?season=2023&position=WR&limit=50").json()
+    row = next(r for r in body["rankings"] if r["player_id"] == rookie.id)
+    assert row["is_rookie"] is True
+    assert "drafted #6" in (row["basis"] or ""), row["basis"]
+
+
+def test_season_board_is_empty_not_broken_without_projections(client, seed):
+    body = client.get("/api/v1/rankings/season?season=2030&position=WR").json()
+    assert body["rankings"] == []
+    assert body["season_started"] is False

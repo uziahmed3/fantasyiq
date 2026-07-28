@@ -17,6 +17,9 @@ POSITIONS = [p.strip().upper() for p in os.getenv("INGEST_POSITIONS", "WR,RB,TE,
 
 ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://ml-service:9000")
 ACTIVE_MODEL_VERSION = os.getenv("ACTIVE_MODEL_VERSION", "xgboost_v1")
+# Promoted independently of the in-season model: different training data, different
+# holdout, different question.
+ACTIVE_PRESEASON_MODEL_VERSION = os.getenv("ACTIVE_PRESEASON_MODEL_VERSION", "preseason_v1")
 PREDICT_BATCH_SIZE = int(os.getenv("PREDICT_BATCH_SIZE", "200"))
 
 

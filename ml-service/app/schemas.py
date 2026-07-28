@@ -96,3 +96,6 @@ class PreseasonBatchResponse(BaseModel):
 
     model_version: str
     predictions: list[float]
+    # Per-item, because a draft board showing a rookie's number next to a veteran's
+    # without any indication of how much is actually known would be misleading.
+    confidences: list[float]

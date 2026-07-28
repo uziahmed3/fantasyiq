@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.models import Player, PlayerContext, PlayerStats, Prediction
 
+# Week 0 means "the season as a whole" - see pipeline/preseason.py.
+SEASON_PROJECTION_WEEK = 0
+
 
 class PlayerRepository:
     def __init__(self, db: Session) -> None:
@@ -72,6 +75,12 @@ class StatsRepository:
             .limit(n)
         )
         return list(self.db.scalars(stmt).all())
+
+    def season_has_games(self, season: int) -> bool:
+        """Has this season actually started? Drives the UI's weekly/season-long switch."""
+        return bool(
+            self.db.scalar(select(func.count(PlayerStats.id)).where(PlayerStats.season == season))
+        )
 
     def games_before_week(self, player_id: int, season: int, week: int) -> int:
         """How many games this player has already played this season.
@@ -195,6 +204,38 @@ class PredictionRepository:
             .where(
                 Prediction.season == season,
                 Prediction.week == week,
+                Prediction.model_version == model_version,
+            )
+        )
+        if position:
+            stmt = stmt.where(Player.position == position.upper())
+        stmt = stmt.order_by(Prediction.prediction.desc()).limit(limit)
+        return list(self.db.execute(stmt).all())
+
+    def next_unplayed_season(self) -> int:
+        """The season the draft board is for: the one after the latest with games."""
+        latest = self.db.scalar(select(func.max(PlayerStats.season)))
+        return int(latest) + 1 if latest is not None else 0
+
+    def season_board(
+        self, season: int, model_version: str, position: str | None = None, limit: int = 100
+    ) -> list[tuple[Prediction, Player, PlayerContext | None]]:
+        """The draft board: season-long projections, stored at the week=0 sentinel.
+
+        Joined to player_context so the board can show whether a number rests on a real
+        prior season or only on where the player was drafted.
+        """
+        stmt = (
+            select(Prediction, Player, PlayerContext)
+            .join(Player, Player.id == Prediction.player_id)
+            .outerjoin(
+                PlayerContext,
+                (PlayerContext.player_id == Prediction.player_id)
+                & (PlayerContext.season == Prediction.season),
+            )
+            .where(
+                Prediction.season == season,
+                Prediction.week == SEASON_PROJECTION_WEEK,
                 Prediction.model_version == model_version,
             )
         )

@@ -56,3 +56,32 @@ class PaginatedPlayers(BaseModel):
     limit: int
     offset: int
     items: list[PlayerOut]
+
+
+class SeasonRankingRow(BaseModel):
+    """One row of the draft board."""
+
+    rank: int
+    player_id: int
+    name: str
+    team: str | None = None
+    position: str
+    projected_points_per_game: float
+    projected_season_points: float
+    confidence: float | None = None
+    is_rookie: bool = False
+    # Why this number exists at all - prior production, or only draft capital.
+    basis: str | None = None
+
+
+class SeasonRankingsOut(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    season: int
+    position: str
+    model_version: str
+    games_assumed: int
+    # True once the season has started, at which point weekly projections are the
+    # better view and the UI should switch.
+    season_started: bool
+    rankings: list[SeasonRankingRow]

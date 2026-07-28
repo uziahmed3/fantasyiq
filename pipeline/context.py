@@ -195,7 +195,120 @@ def _team_situation(engine: Engine, prior_season: int) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------- optional feeds
-def _player_bios() -> pd.DataFrame:
+REGISTER_ROOKIE = text("""
+INSERT INTO players (external_id, name, team, position, age, height_inches, weight_lbs,
+                     draft_round, draft_pick, rookie_season, created_at, updated_at)
+VALUES (:external_id, :name, :team, :position, :age, :height_inches, :weight_lbs,
+        :draft_round, :draft_pick, :rookie_season, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+ON CONFLICT (external_id) DO UPDATE SET
+    team          = COALESCE(EXCLUDED.team, players.team),
+    position      = EXCLUDED.position,
+    draft_round   = COALESCE(EXCLUDED.draft_round, players.draft_round),
+    draft_pick    = COALESCE(EXCLUDED.draft_pick, players.draft_pick),
+    rookie_season = COALESCE(EXCLUDED.rookie_season, players.rookie_season),
+    updated_at    = CURRENT_TIMESTAMP
+""")
+
+
+def _draft_picks(season: int | None = None) -> pd.DataFrame:
+    """Draft round and overall pick from the draft_picks release.
+
+    Needed because players.parquet lags: checked against the real file, all 679 players
+    with rookie_season 2026 had null draft_year/round/pick, while draft_picks.parquet is
+    published within weeks of the draft. For a rookie, draft position is the single most
+    informative feature we have, so it is worth the extra fetch.
+    """
+    try:
+        path = ingest._download(ingest.DRAFT_URL, ingest.DOWNLOAD_DIR / "draft_picks.parquet")
+        df = pd.read_parquet(path)
+    except Exception as exc:  # noqa: BLE001 - optional feed
+        log.warning("draft_picks_unavailable", error=str(exc))
+        return pd.DataFrame()
+
+    if "gsis_id" not in df.columns:
+        log.warning("draft_picks_no_gsis_id", columns=list(df.columns)[:12])
+        return pd.DataFrame()
+
+    keep = {"gsis_id": "external_id", "round": "draft_round", "pick": "draft_pick"}
+    present = {k: v for k, v in keep.items() if k in df.columns}
+    if "round" not in df.columns or "pick" not in df.columns:
+        log.warning("draft_picks_unexpected_schema", columns=list(df.columns)[:12])
+        return pd.DataFrame()
+
+    out = df[list(present) + (["season"] if "season" in df.columns else [])].rename(columns=present)
+    if season is not None and "season" in out.columns:
+        # Only this class; older picks already live on the players table.
+        out = out[pd.to_numeric(out["season"], errors="coerce") == season]
+    out = out.dropna(subset=["external_id"]).drop_duplicates("external_id")
+    log.info("draft_picks_loaded", season=season, rows=len(out))
+    return out.drop(columns=["season"], errors="ignore")
+
+
+def register_incoming_rookies(engine: Engine, season: int, positions: list[str]) -> int:
+    """Insert this year's rookie class, who have no stats and so are not in the database.
+
+    Players only get a row when they appear in weekly stats, which means a draft class is
+    invisible until it plays - and a draft board without rookies is missing exactly the
+    players people most need help evaluating. The bios feed knows them in the spring:
+    name, position, team and draft slot, which is all the preseason model needs.
+    """
+    bios = _player_bios(full=True)
+    if bios.empty or "rookie_season" not in bios.columns:
+        log.warning("rookie_registration_skipped", reason="no bios or no rookie_season")
+        return 0
+
+    incoming = bios[pd.to_numeric(bios["rookie_season"], errors="coerce") == season].copy()
+    if "position" in incoming.columns:
+        incoming = incoming[incoming["position"].str.upper().isin([p.upper() for p in positions])]
+    if incoming.empty:
+        log.info("no_incoming_rookies", season=season)
+        return 0
+
+    # Fill draft capital from the draft_picks release, which is current when
+    # players.parquet is not.
+    picks = _draft_picks(season)
+    if not picks.empty:
+        incoming = incoming.merge(picks, on="external_id", how="left", suffixes=("", "_dp"))
+        for col in ("draft_round", "draft_pick"):
+            alt = f"{col}_dp"
+            if alt in incoming.columns:
+                incoming[col] = incoming[col].combine_first(incoming[alt])
+                incoming = incoming.drop(columns=[alt])
+
+    payload = []
+    for row in incoming.itertuples(index=False):
+        payload.append(
+            {
+                "external_id": str(row.external_id),
+                "name": getattr(row, "name", None) or str(row.external_id),
+                "team": getattr(row, "team", None),
+                "position": (getattr(row, "position", None) or "WR").upper()[:4],
+                # Draft-eligible players are 21-23; a real birth_date would be better but
+                # the age curve barely moves across that range.
+                "age": 22.0,
+                "height_inches": None,
+                "weight_lbs": None,
+                "draft_round": _clean_int(getattr(row, "draft_round", None)),
+                "draft_pick": _clean_int(getattr(row, "draft_pick", None)),
+                "rookie_season": season,
+            }
+        )
+
+    with engine.begin() as conn:
+        for i in range(0, len(payload), 500):
+            conn.execute(REGISTER_ROOKIE, payload[i : i + 500])
+
+    drafted = sum(1 for p in payload if p["draft_pick"] is not None)
+    log.info(
+        "rookies_registered",
+        season=season,
+        players=len(payload),
+        with_draft_pick=drafted,
+    )
+    return len(payload)
+
+
+def _player_bios(full: bool = False) -> pd.DataFrame:
     """players.parquet: draft capital, rookie season, and the pfr_id crosswalk."""
     try:
         path = ingest._download(ingest.PLAYERS_URL, ingest.DOWNLOAD_DIR / "players.parquet")
@@ -212,7 +325,19 @@ def _player_bios() -> pd.DataFrame:
         "rookie_season": "rookie_season",
         "years_of_experience": "years_of_experience",
     }
-    present = {src: dst for src, dst in wanted.items() if src in df.columns}
+    if full:
+        # Registering a brand-new player needs identity, not just draft numbers.
+        wanted |= {
+            "display_name": "name",
+            "full_name": "name",
+            "position": "position",
+            "latest_team": "team",
+            "team_abbr": "team",
+        }
+    present = {}
+    for src, dst in wanted.items():
+        if src in df.columns and dst not in present.values():
+            present[src] = dst
     missing = set(wanted) - set(present)
     if missing:
         log.warning("player_bios_columns_missing", columns=sorted(missing))
@@ -312,10 +437,21 @@ def _clean_float(value) -> float | None:
         return None
 
 
-def build(engine: Engine, season: int, use_optional_feeds: bool = True) -> int:
+def build(
+    engine: Engine,
+    season: int,
+    use_optional_feeds: bool = True,
+    register_rookies: bool = True,
+) -> int:
     """Assemble and upsert player_context for `season`, from season - 1 data."""
     prior_season = season - 1
     log.info("context_build_start", season=season, prior_season=prior_season)
+
+    if use_optional_feeds and register_rookies:
+        # Do this first so the roster query below picks the new players up.
+        from config import POSITIONS
+
+        register_incoming_rookies(engine, season, POSITIONS)
 
     production = _prior_production(engine, prior_season)
     situation = _team_situation(engine, prior_season)
@@ -343,6 +479,10 @@ def build(engine: Engine, season: int, use_optional_feeds: bool = True) -> int:
                     SELECT 1 FROM player_stats ps
                     WHERE ps.player_id = p.id AND ps.season IN (:season, :prior_season)
                 )
+                -- ...or he is entering the league this year. Rookies have no stats
+                -- anywhere, so EXISTS alone would drop the entire draft class - which is
+                -- exactly the group a draft board most needs.
+                OR p.rookie_season = :season
             """),
             conn,
             params={"season": season, "prior_season": prior_season},

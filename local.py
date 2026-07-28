@@ -372,6 +372,37 @@ def spawn_api(
     return subprocess.Popen(cmd, cwd=str(cwd), env=env)
 
 
+def project_season(env: dict[str, str], ml_port: int) -> None:
+    """Project the upcoming season - the draft board.
+
+    Runs alongside the weekly projections because in the offseason it is the only view
+    with anything in it, and it is what the dashboard opens on.
+    """
+    step("Projecting the upcoming season (draft board)")
+    ml = spawn_api(ROOT / "ml-service", ml_port, env, quiet=True)
+    try:
+        if not wait_for(f"http://127.0.0.1:{ml_port}/health", 60):
+            warn("ML service did not start; skipping season projections.")
+            return
+        if (
+            run(
+                [VENV_PY, "-m", "preseason"],
+                ROOT / "pipeline",
+                env,
+                "Season projection",
+                fatal=False,
+            )
+            != 0
+        ):
+            warn("Season projection failed; the weekly view still works.")
+    finally:
+        ml.terminate()
+        try:
+            ml.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            ml.kill()
+
+
 def generate_projections(env: dict[str, str], ml_port: int) -> None:
     """Batch-score every player for the upcoming week, so /rankings has data.
 
@@ -425,7 +456,7 @@ def serve(env: dict[str, str], api_port: int, ml_port: int, open_browser: bool) 
 
         bar = "=" * 50
         print(f"\n{C.GREEN}{bar}\n FantasyIQ is running (no Docker)\n{bar}{C.OFF}\n")
-        print(f"  Dashboard   http://localhost:{api_port}/app/")
+        print(f"  Draft board http://localhost:{api_port}/app/")
         print(f"  API docs    http://localhost:{api_port}/docs")
         print(f"  ML docs     http://localhost:{ml_port}/docs")
         print(f"  Metrics     http://localhost:{api_port}/metrics")
@@ -560,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.skip_train:
             train(env)
         generate_projections(env, args.ml_port)
+        project_season(env, args.ml_port)
 
     return serve(env, args.api_port, args.ml_port, not args.no_browser)
 

@@ -138,8 +138,11 @@ def predict_preseason_batch(req: PreseasonBatchRequest) -> PreseasonBatchRespons
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except ModelNotFound as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    confidences = [registry._preseason_confidence(item.model_dump(), model) for item in req.items]
     return PreseasonBatchResponse(
-        model_version=model.version, predictions=[round(float(v), 3) for v in values]
+        model_version=model.version,
+        predictions=[round(float(v), 3) for v in values],
+        confidences=confidences,
     )
 
 
