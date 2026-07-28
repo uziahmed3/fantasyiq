@@ -1,10 +1,17 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import DbSession
 from app.core.cache import cache_get, cache_set, rankings_key
 from app.core.config import settings
-from app.repositories.players import LeaderRepository, PredictionRepository, StatsRepository
+from app.repositories.players import (
+    LeaderRepository,
+    PlayerRepository,
+    PredictionRepository,
+    StatsRepository,
+)
 from app.schemas.player import (
+    ProjectionDriver,
+    ProjectionWhy,
     RankingRow,
     RankingsOut,
     SeasonLeaderRow,
@@ -12,11 +19,14 @@ from app.schemas.player import (
     SeasonRankingRow,
     SeasonRankingsOut,
 )
+from app.schemas.prediction import PredictionRequest
 from app.services.draft_value import (
     replacement_levels,
     replacement_note,
     value_over_replacement,
 )
+from app.services.ml_client import MLServiceError
+from app.services.predictions import PredictionService
 
 router = APIRouter(prefix="/rankings", tags=["rankings"])
 
@@ -74,19 +84,52 @@ def _position_rank(pools: dict[str, list[float]], position: str, projection: flo
 
 
 def _basis(ctx) -> str | None:
-    """Plain-language note on what a season projection actually rests on."""
+    """Plain-language note on what a season projection actually rests on.
+
+    This used to read "16 games last season", which was true of nearly every player on
+    the board and so told a drafter nothing about which of two to take. Worse, it implied
+    the projection was a view of last season only - the exact complaint that prompted the
+    career features in the first place.
+
+    What it says now is the shape of the evidence: how long the record is, what the
+    career rate is, and whether last season agreed with it. A down year and a breakout
+    year look completely different here, and neither is hidden behind a game count.
+
+    Derived from player_context alone, so the board stays a single indexed read. The
+    per-feature attribution is a click away on /rankings/season/{player_id}/why; it costs
+    a model call and nobody should pay for it just to load a page.
+    """
     if ctx is None:
         return None
     if ctx.is_rookie:
         if ctx.draft_pick:
-            return f"rookie - drafted #{ctx.draft_pick}"
-        return "rookie - undrafted or draft position unknown"
+            return f"rookie, no NFL record - drafted #{ctx.draft_pick}"
+        return "rookie, no NFL record - undrafted"
+
+    seasons = ctx.career_seasons or 0
+    career = ctx.career_weighted_ppg or 0.0
+    last = ctx.prior_points_per_game or 0.0
     games = ctx.prior_games or 0
-    if games >= 12:
-        return f"{games} games last season"
-    if games > 0:
-        return f"only {games} games last season"
-    return "no games last season"
+
+    if seasons <= 1:
+        head = f"1 season, {games} games"
+    else:
+        head = f"{seasons} seasons, {career:.1f} career pts/gm"
+
+    # Did last season agree with the career record? That disagreement is the single most
+    # decision-relevant fact on the board: it is the difference between buying a decline
+    # and buying a discount.
+    if career > 0 and games >= 4:
+        delta = last - career
+        if delta <= -3.0:
+            head += f"; last year {last:.1f} was well below it"
+        elif delta >= 3.0:
+            head += f"; last year {last:.1f} was a step up"
+        else:
+            head += f"; last year {last:.1f}, in line"
+    if 0 < games < 10:
+        head += f" (only {games} games)"
+    return head
 
 
 @router.get(
@@ -178,6 +221,85 @@ def season_rankings(
             )
             for i, (pred, player, ctx) in enumerate(rows, start=offset + 1)
         ],
+    )
+    cache_set(key, out.model_dump(), ttl=settings.rankings_cache_ttl)
+    return out
+
+
+@router.get(
+    "/season/{player_id}/why",
+    response_model=ProjectionWhy,
+    summary="Why is this player projected where he is?",
+)
+def season_projection_why(
+    db: DbSession,
+    player_id: int,
+    season: int | None = Query(None, description="Defaults to the season being projected"),
+    top: int = Query(6, ge=1, le=20),
+) -> ProjectionWhy:
+    """Decompose one player's season projection into the features that produced it.
+
+    Kept off the board itself deliberately. Attribution walks every tree for every
+    feature, so folding it into the leaderboard would make every page load pay for
+    explanations of twenty players when the user wants one. This is the drill-down.
+
+    Cached on (player, season, model version): the inputs are a fixed context row and a
+    fixed artifact, so the answer cannot change until one of them does.
+    """
+    repo = PredictionRepository(db)
+    if season is None:
+        season = repo.next_unplayed_season()
+
+    player = PlayerRepository(db).get(player_id)
+    if player is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no player with id {player_id}")
+
+    model_version = settings.active_preseason_model_version
+    key = rankings_key(f"why:{player_id}:{season}:{model_version}", 0, top)
+    if (cached := cache_get(key)) is not None:
+        return ProjectionWhy(**cached)
+
+    service = PredictionService(db)
+    features = service.build_preseason_features(
+        # week is required by the request contract and validated >= 1; the preseason
+        # feature builder reads only player_id and season, so any legal week works.
+        PredictionRequest(player_id=player_id, season=season, week=1)
+    )
+    if features is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"no preseason context for player {player_id} in {season} - run the context "
+            "pipeline for that season first",
+        )
+
+    try:
+        body = service.ml.explain_preseason(features, model_version, top=top)
+    except MLServiceError as exc:
+        # The projection itself is fine and already on screen; only the explanation is
+        # missing. 503 says "ask again later", which is the truth, rather than 500.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+    out = ProjectionWhy(
+        player_id=player_id,
+        name=player.name,
+        position=player.position,
+        season=season,
+        projected_points_per_game=round(body["prediction"], 2),
+        baseline=round(body["baseline"], 2),
+        model_version=body["model_version"],
+        headline=body["headline"],
+        drivers=[
+            ProjectionDriver(
+                feature=d["feature"],
+                label=d["label"],
+                display_value=d["display_value"],
+                contribution=d["contribution"],
+                explanation=d["explanation"],
+            )
+            for d in body["drivers"]
+        ],
+        drivers_shown=body["drivers_shown"],
+        total_features=body["total_features"],
     )
     cache_set(key, out.model_dump(), ttl=settings.rankings_cache_ttl)
     return out

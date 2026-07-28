@@ -67,7 +67,6 @@ class PlayerContext(Base, TimestampMixin):
     prior_points_per_target: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     career_points_per_target: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     efficiency_delta: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    qb_quality: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     team_departed_target_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     team_departed_carry_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     teammate_top_target_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)

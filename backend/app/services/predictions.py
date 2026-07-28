@@ -116,7 +116,6 @@ class PredictionService:
             prior_points_per_target=ctx.prior_points_per_target,
             career_points_per_target=ctx.career_points_per_target,
             efficiency_delta=ctx.efficiency_delta,
-            qb_quality=ctx.qb_quality,
             team_departed_target_share=ctx.team_departed_target_share,
             team_departed_carry_share=ctx.team_departed_carry_share,
             teammate_top_target_share=ctx.teammate_top_target_share,

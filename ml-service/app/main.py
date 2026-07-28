@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI, HTTPException, status
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from app.explain import describe, format_value, headline, label
 from app.features import (
     FEATURE_ORDER,
     FEATURE_SCHEMA_VERSION,
@@ -14,16 +15,20 @@ from app.features import (
 from app.registry import (
     FALLBACK_VERSION,
     PRESEASON_FALLBACK_VERSION,
+    ExplainUnsupported,
     ModelNotFound,
     registry,
 )
 from app.schemas import (
     BatchPredictRequest,
     BatchPredictResponse,
+    Driver,
     PredictRequest,
     PredictResponse,
     PreseasonBatchRequest,
     PreseasonBatchResponse,
+    PreseasonExplainRequest,
+    PreseasonExplainResponse,
     PreseasonRequest,
     PreseasonResponse,
 )
@@ -124,6 +129,58 @@ def predict_preseason(req: PreseasonRequest) -> PreseasonResponse:
         model_version=resolved,
         framework=registry.get(resolved).framework,
         basis=_basis(features),
+    )
+
+
+@app.post(
+    "/predict/preseason/explain",
+    response_model=PreseasonExplainResponse,
+    tags=["inference"],
+    summary="Why is this player projected here?",
+)
+def explain_preseason(req: PreseasonExplainRequest) -> PreseasonExplainResponse:
+    """Decompose one projection into the features that produced it.
+
+    Distinct from the feature_importances in /models: those are global and identical for
+    every player, which makes them useless for comparing two of them. These are per-player
+    contributions read out of the trees, and they sum to this player's projection.
+
+    A draft board that cannot answer "why" is a black box asking to be trusted. This is
+    the endpoint that lets it answer, and it is also a debugging tool - it is how a
+    2.4-point penalty for a three-year-old draft position was found on a player who had
+    since posted 23.6 points per game.
+    """
+    version = _resolve_preseason(req.model_version)
+    features = req.features.model_dump()
+    try:
+        baseline, prediction, drivers, resolved = registry.explain_preseason(
+            version, features, top=req.top
+        )
+    except FeatureContractError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except ModelNotFound as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except ExplainUnsupported as exc:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+
+    return PreseasonExplainResponse(
+        prediction=round(prediction, 3),
+        baseline=round(baseline, 3),
+        model_version=resolved,
+        headline=headline(drivers),
+        drivers=[
+            Driver(
+                feature=name,
+                label=label(name),
+                value=round(value, 4),
+                display_value=format_value(name, value),
+                contribution=round(contribution, 3),
+                explanation=describe(name, value, contribution),
+            )
+            for name, value, contribution in drivers
+        ],
+        drivers_shown=len(drivers),
+        total_features=len(PRESEASON_FEATURE_ORDER),
     )
 
 

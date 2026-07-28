@@ -82,6 +82,19 @@
   .caveat{background:rgba(210,153,34,.08);border:1px solid rgba(210,153,34,.25);
           border-radius:8px;padding:10px 13px;color:var(--muted);font-size:12px;
           margin-bottom:16px;line-height:1.65}
+
+/* ---- projection breakdown ---- */
+.driver { margin: 7px 0; }
+.driver-top { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.driver-label { color: var(--fg); }
+.driver-val { color: var(--muted); }
+.driver-num { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+.driver-num.up { color: #16a34a; }
+.driver-num.down { color: #dc2626; }
+.driver-track { height: 5px; background: rgba(127,127,127,.16); border-radius: 3px; margin-top: 3px; }
+.driver-bar { height: 100%; border-radius: 3px; }
+.driver-bar.up { background: #16a34a; }
+.driver-bar.down { background: #dc2626; }
 </style>
 </head>
 <body>
@@ -128,6 +141,8 @@
     <div class="panel">
       <h2>Player detail</h2>
       <div id="player"><p class="empty">Select a player from the table.</p></div>
+      <h2 style="margin-top:18px">Why this projection</h2>
+      <div id="why-panel"><p class="empty">Select a player to see what drives his number.</p></div>
     </div>
     <div class="panel">
       <h2>Single-game projection</h2>
@@ -408,7 +423,42 @@ async function selectPlayer(id, row) {
         ? `<div class="kv"><span>${logSeason} total</span><span>${total.toFixed(0)} pts in ${asc.length} games</span></div>
            <p class="note" style="margin-top:10px">${logSeason} game log</p>${spark}`
         : `<p class="empty">No ${logSeason} games — likely a rookie.</p>`);
+    if (state.tab === "projected") renderWhy(id);
   } catch (e) { showError(e.message); }
+}
+
+// Per-feature attribution for one player. Loaded on demand rather than with the board:
+// walking the trees for every feature is real work, and nobody should pay for twenty
+// explanations to look at one.
+async function renderWhy(id) {
+  const box = $("why-panel");
+  box.innerHTML = `<p class="empty">working out why…</p>`;
+  try {
+    const w = await api(`/rankings/season/${id}/why?top=6`);
+    const span = Math.max(...w.drivers.map(d => Math.abs(d.contribution)), 0.1);
+    const bars = w.drivers.map(d => {
+      const pct = (Math.abs(d.contribution) / span) * 100;
+      const up = d.contribution >= 0;
+      return `<div class="driver">
+        <div class="driver-top">
+          <span class="driver-label">${d.label}</span>
+          <span class="driver-val">${d.display_value}</span>
+          <span class="driver-num ${up ? "up" : "down"}">${up ? "+" : "−"}${Math.abs(d.contribution).toFixed(1)}</span>
+        </div>
+        <div class="driver-track"><div class="driver-bar ${up ? "up" : "down"}"
+             style="width:${pct}%"></div></div>
+      </div>`;
+    }).join("");
+    box.innerHTML =
+      `<p class="note"><strong>${w.projected_points_per_game.toFixed(1)} pts/gm</strong> —
+        starts from ${w.baseline.toFixed(1)} (an average player to this model), then:</p>
+       ${bars}
+       <p class="note" style="margin-top:8px">Top ${w.drivers_shown} of ${w.total_features} features,
+        so these do not add up to the total on their own. Every number is what the model
+        actually did, read out of the trees — not a guess at its reasoning.</p>`;
+  } catch (e) {
+    box.innerHTML = `<p class="empty">No breakdown available (${e.message}).</p>`;
+  }
 }
 
 // ---- single-game projection ------------------------------------------------

@@ -35,7 +35,7 @@ TARGET = "fantasy_points"
 # rank are the only real signal for a rookie; target share and snap share separate
 # "productive" from "happened to be on a pass-heavy team"; qb_changed captures the
 # biggest knowable swing factor for a receiver.
-PRESEASON_SCHEMA_VERSION = "ps3"
+PRESEASON_SCHEMA_VERSION = "ps5"
 
 PRESEASON_FEATURE_ORDER: tuple[str, ...] = (
     "prior_points_per_game",
@@ -73,7 +73,6 @@ PRESEASON_FEATURE_ORDER: tuple[str, ...] = (
     "career_points_per_target",
     "efficiency_delta",
     # ---- situation ----
-    "qb_quality",
     "team_departed_target_share",
     "team_departed_carry_share",
     "teammate_top_target_share",
@@ -110,12 +109,49 @@ PRESEASON_DEFAULTS: dict[str, float] = {
     "prior_points_per_target": 0.0,
     "career_points_per_target": 0.0,
     "efficiency_delta": 0.0,
-    "qb_quality": 0.0,
     "team_departed_target_share": 0.0,
     "team_departed_carry_share": 0.0,
     "teammate_top_target_share": 0.0,
     "teammate_top_carry_share": 0.0,
 }
+
+
+# ---------------------------------------------------------- draft capital, decayed
+# Draft position is a guess about talent nobody has measured yet. For a rookie it is
+# almost the only signal there is. For a player with three seasons behind him it has been
+# superseded - we no longer need to guess, we can look.
+#
+# The model did not know that. Across the training set high picks outproduce low picks,
+# so it learned to reward draft position for everybody, and with about 1,300 training
+# rows it could not discover the interaction ("use this only when production is missing")
+# on its own. The bill came due on Puka Nacua: pick 177, and still being charged for it
+# after 44 games at 23.6 points a game. Against Jaxon Smith-Njigba, pick 20, draft
+# capital alone swung 2.4 points - more than their entire difference in production.
+#
+# So the shrink is made explicit instead of hoped for. Draft capital fades toward
+# league-average as real games accumulate, and is gone after two full seasons.
+DRAFT_EVIDENCE_GAMES = 32.0
+# Round 4 of 7 and the middle of the draft: "we know nothing either way".
+NEUTRAL_DRAFT_ROUND = 4.0
+NEUTRAL_DRAFT_PICK = 120.0
+
+
+def draft_capital_weight(career_games: float | None) -> float:
+    """How much draft position still deserves to count: 1.0 for a rookie, 0.0 by game 32."""
+    if career_games is None or not np.isfinite(float(career_games)):
+        return 1.0
+    return float(max(0.0, 1.0 - float(career_games) / DRAFT_EVIDENCE_GAMES))
+
+
+def decay_draft_capital(
+    draft_round: float, draft_pick: float, career_games: float | None
+) -> tuple[float, float]:
+    """Blend draft position toward neutral in proportion to games actually played."""
+    w = draft_capital_weight(career_games)
+    return (
+        w * float(draft_round) + (1.0 - w) * NEUTRAL_DRAFT_ROUND,
+        w * float(draft_pick) + (1.0 - w) * NEUTRAL_DRAFT_PICK,
+    )
 
 
 class FeatureContractError(ValueError):
@@ -147,13 +183,20 @@ def preseason_row(features: Mapping[str, float | None]) -> np.ndarray:
     unexpected = [k for k in features if k not in PRESEASON_FEATURE_ORDER]
     if unexpected:
         raise FeatureContractError(f"unexpected preseason features: {unexpected}")
-    values = []
+    resolved: dict[str, float] = {}
     for name in PRESEASON_FEATURE_ORDER:
         raw = features.get(name)
         if raw is None or (isinstance(raw, float) and np.isnan(raw)):
             raw = PRESEASON_DEFAULTS[name]
-        values.append(float(raw))
-    return np.asarray([values], dtype=np.float32)
+        resolved[name] = float(raw)
+
+    # Callers pass raw draft position; the model is trained on the decayed version. Doing
+    # it here rather than in the pipeline keeps one definition for training and serving,
+    # so the two cannot drift.
+    resolved["draft_round"], resolved["draft_pick"] = decay_draft_capital(
+        resolved["draft_round"], resolved["draft_pick"], resolved["career_games"]
+    )
+    return np.asarray([[resolved[n] for n in PRESEASON_FEATURE_ORDER]], dtype=np.float32)
 
 
 def preseason_matrix(rows: list[Mapping[str, float | None]]) -> np.ndarray:

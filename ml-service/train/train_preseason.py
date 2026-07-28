@@ -34,7 +34,14 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from app.features import PRESEASON_DEFAULTS, PRESEASON_FEATURE_ORDER, PRESEASON_SCHEMA_VERSION
+from app.features import (
+    NEUTRAL_DRAFT_PICK,
+    NEUTRAL_DRAFT_ROUND,
+    PRESEASON_DEFAULTS,
+    PRESEASON_FEATURE_ORDER,
+    PRESEASON_SCHEMA_VERSION,
+    draft_capital_weight,
+)
 from train.common import metrics, write_metadata
 from train.dataset import ARTIFACT_DIR, _database_url
 
@@ -45,6 +52,61 @@ TARGET_WEEKS = 18
 # A season needs this many games before its average is a fair target; below it, one big
 # or empty game dominates.
 MIN_TARGET_GAMES = 6
+
+# Direction each feature is allowed to move the projection.
+#
+# Without this, the model ranked Puka Nacua (23.6 ppg last season, 24.2 career) *below*
+# Jaxon Smith-Njigba (21.3 / 20.6). Nacua led on every production feature and trailed
+# only on target share, snap share and one game played. That is not a defensible
+# ordering, and the cause is structural rather than a bad fit: gradient-boosted trees
+# split on thresholds and cannot extrapolate past the top of their training range. Above
+# roughly 20 ppg the training rows thin out, the production splits stop separating
+# anybody, and whatever secondary features still vary - target share, snaps - end up
+# deciding the elite tier. Exactly the tier a drafter cares most about.
+#
+# A monotonic constraint forbids the pathology directly. +1 means "increasing this
+# feature can never lower the projection", -1 the reverse, 0 leaves the feature free.
+# XGBoost enforces it at split time, so it holds for every player, not just on average.
+#
+# Only features with a defensible direction are constrained. Age is deliberately free:
+# it peaks and declines, so forcing a direction would be wrong. So is efficiency_delta,
+# where a large negative value can mean the role held and only the finishing broke -
+# which is a bounce-back signal, not a downgrade.
+MONOTONE: dict[str, int] = {
+    # Production: more is better. This is the constraint that matters.
+    "prior_points_per_game": 1,
+    "prior_last4_points_per_game": 1,
+    "prior_targets_per_game": 1,
+    "prior_target_share": 1,
+    "prior_carries_per_game": 1,
+    "prior_carry_share": 1,
+    "prior_yards_per_game": 1,
+    "prior_snap_share": 1,
+    "career_weighted_ppg": 1,
+    "career_weighted_targets_per_game": 1,
+    "career_weighted_carries_per_game": 1,
+    "career_weighted_target_share": 1,
+    "career_best_ppg": 1,
+    "prior_points_per_target": 1,
+    "career_points_per_target": 1,
+    # Opportunity: a bigger team passing volume, and targets vacated by players who left.
+    "team_pass_attempts_prior": 1,
+    "team_departed_target_share": 1,
+    "team_departed_carry_share": 1,
+    # Cost and competition: more is worse. Rank 1 beats rank 4, pick 5 beats pick 200,
+    # and a strong teammate at the same position eats the same targets.
+    "depth_chart_rank": -1,
+    "draft_round": -1,
+    "draft_pick": -1,
+    "teammate_top_target_share": -1,
+    "teammate_top_carry_share": -1,
+}
+
+
+def monotone_constraints() -> str:
+    """XGBoost wants the constraints as a positional tuple string, in feature order."""
+    return "(" + ",".join(str(MONOTONE.get(f, 0)) for f in PRESEASON_FEATURE_ORDER) + ")"
+
 
 DATASET_SQL = text("""
 SELECT
@@ -78,7 +140,6 @@ SELECT
     pc.prior_points_per_target,
     pc.career_points_per_target,
     pc.efficiency_delta,
-    pc.qb_quality,
     pc.team_departed_target_share,
     pc.team_departed_carry_share,
     pc.teammate_top_target_share,
@@ -121,6 +182,13 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
         if col not in out.columns:
             out[col] = PRESEASON_DEFAULTS[col]
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(PRESEASON_DEFAULTS[col])
+
+    # Same decay the serving path applies, from the same function - training on raw draft
+    # position while serving decayed values would be a silent skew, and the kind that
+    # does not show up in any test.
+    weight = out["career_games"].map(draft_capital_weight)
+    out["draft_round"] = weight * out["draft_round"] + (1 - weight) * NEUTRAL_DRAFT_ROUND
+    out["draft_pick"] = weight * out["draft_pick"] + (1 - weight) * NEUTRAL_DRAFT_PICK
     return out.dropna(subset=["actual_ppg"])
 
 
@@ -191,6 +259,7 @@ def main() -> int:
         objective="reg:squarederror",
         eval_metric="rmse",
         early_stopping_rounds=40,
+        monotone_constraints=monotone_constraints(),
         random_state=7,
         n_jobs=4,
     )

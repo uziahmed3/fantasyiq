@@ -78,7 +78,6 @@ class PreseasonFeatures(BaseModel):
     prior_points_per_target: float | None = None
     career_points_per_target: float | None = None
     efficiency_delta: float | None = None
-    qb_quality: float | None = None
     team_departed_target_share: float | None = None
     team_departed_carry_share: float | None = None
     teammate_top_target_share: float | None = None
@@ -117,3 +116,45 @@ class PreseasonBatchResponse(BaseModel):
     # Per-item, because a draft board showing a rookie's number next to a veteran's
     # without any indication of how much is actually known would be misleading.
     confidences: list[float]
+
+
+class PreseasonExplainRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    """Same inputs as a preseason prediction, plus how many drivers to return."""
+
+    features: "PreseasonFeatures"
+    model_version: str | None = None
+    top: int = Field(6, ge=1, le=20)
+
+
+class Driver(BaseModel):
+    """One feature's exact effect on this player's projection."""
+
+    feature: str
+    label: str
+    value: float
+    display_value: str
+    contribution: float
+    explanation: str
+
+
+class PreseasonExplainResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    """A projection decomposed into terms that sum to it.
+
+    baseline is the model's average output across its training data - where a player with
+    no distinguishing features would land. Every driver is a signed departure from that,
+    so baseline + sum(all contributions) == prediction exactly. Only the top N drivers are
+    returned, so the listed ones will not sum to the total on their own; that is stated
+    rather than hidden, via drivers_shown and total_features.
+    """
+
+    prediction: float
+    baseline: float
+    model_version: str
+    headline: str
+    drivers: list[Driver]
+    drivers_shown: int
+    total_features: int

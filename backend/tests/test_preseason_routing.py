@@ -308,3 +308,102 @@ def test_value_sort_and_points_sort_give_different_orders(client, db_session, se
     for r in by_value["rankings"]:
         assert r["value_over_replacement"] is not None
         assert r["position_rank"] >= 1
+
+
+# ------------------------------------------------------- projection explanation
+def test_why_endpoint_decomposes_a_projection(client, db_session, seed):
+    """The drill-down that replaced "16 games last season" as the board's only answer."""
+    from app.models import PlayerContext
+
+    db_session.add(
+        PlayerContext(
+            player_id=15,
+            season=2026,
+            team="MIN",
+            prior_games=17,
+            prior_points_per_game=11.9,
+            career_weighted_ppg=17.8,
+            career_games=80,
+            career_seasons=5,
+            draft_round=1,
+            draft_pick=22,
+            teammate_top_target_share=0.20,
+        )
+    )
+    db_session.commit()
+
+    body = client.get("/api/v1/rankings/season/15/why?season=2026").json()
+    assert body["player_id"] == 15
+    assert body["name"] == "Justin Jefferson"
+    assert body["baseline"] == 6.3
+    assert body["drivers_shown"] == len(body["drivers"])
+    # Both directions must be representable, or the panel can only ever flatter a player.
+    assert any(d["contribution"] > 0 for d in body["drivers"])
+    assert any(d["contribution"] < 0 for d in body["drivers"])
+    assert "career scoring rate" in body["headline"]
+
+
+def test_why_endpoint_labels_are_human_readable(client, db_session, seed):
+    from app.models import PlayerContext
+
+    db_session.add(PlayerContext(player_id=15, season=2026, team="MIN", career_weighted_ppg=17.8))
+    db_session.commit()
+    body = client.get("/api/v1/rankings/season/15/why?season=2026").json()
+    for d in body["drivers"]:
+        assert "_" not in d["label"], d["label"]
+
+
+def test_why_endpoint_404s_for_an_unknown_player(client, seed):
+    assert client.get("/api/v1/rankings/season/99999/why?season=2026").status_code == 404
+
+
+def test_why_endpoint_404s_when_no_context_exists(client, seed):
+    """No context is a missing-pipeline-run problem, and says so instead of returning zeros."""
+    resp = client.get("/api/v1/rankings/season/15/why?season=2031")
+    assert resp.status_code == 404
+    assert "context" in resp.json()["detail"]
+
+
+def test_why_endpoint_503s_when_the_model_is_unavailable(client, db_session, seed, stub_ml):
+    """A missing explanation must not read as a missing player or a server fault."""
+    from app.models import PlayerContext
+    from app.services.ml_client import MLServiceError
+
+    db_session.add(PlayerContext(player_id=15, season=2026, team="MIN", career_weighted_ppg=17.8))
+    db_session.commit()
+    stub_ml.fail_with = MLServiceError("explanation unavailable (501)")
+    assert client.get("/api/v1/rankings/season/15/why?season=2026").status_code == 503
+
+
+def test_basis_reports_the_career_record_not_just_last_season(client, db_session, seed):
+    """The original complaint: a down year must not read as the whole story."""
+    from app.models import PlayerContext, Prediction
+
+    db_session.add_all([
+        PlayerContext(
+            player_id=15,
+            season=2026,
+            team="MIN",
+            prior_games=17,
+            prior_points_per_game=11.9,
+            career_weighted_ppg=17.8,
+            career_seasons=5,
+        ),
+        Prediction(
+            player_id=15,
+            season=2026,
+            week=0,
+            opponent="MIN",
+            prediction=16.3,
+            confidence=0.8,
+            model_version="preseason_v1",
+        ),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/v1/rankings/season?season=2026&position=WR").json()
+    basis = next(r for r in body["rankings"] if r["player_id"] == 15)["basis"]
+    assert "5 seasons" in basis
+    assert "17.8 career" in basis
+    # And it must name the disagreement, which is the decision-relevant part.
+    assert "below" in basis, basis

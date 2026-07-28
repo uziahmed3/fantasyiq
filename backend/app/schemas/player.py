@@ -126,3 +126,37 @@ class SeasonLeadersOut(BaseModel):
     per_page: int
     total: int
     leaders: list[SeasonLeaderRow]
+
+
+class ProjectionDriver(BaseModel):
+    """One feature's measured effect on a single player's projection."""
+
+    feature: str
+    label: str
+    display_value: str
+    contribution: float
+    explanation: str
+
+
+class ProjectionWhy(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    """The full decomposition of one player's season projection.
+
+    baseline is where the model puts a player with no distinguishing features - roughly
+    the average of everyone it trained on. Every driver is a signed move away from that.
+    Only the largest few are returned, so they will not add up to the projection on their
+    own; drivers_shown and total_features say so plainly rather than implying completeness.
+    """
+
+    player_id: int
+    name: str
+    position: str
+    season: int
+    projected_points_per_game: float
+    baseline: float
+    model_version: str
+    headline: str
+    drivers: list[ProjectionDriver]
+    drivers_shown: int
+    total_features: int

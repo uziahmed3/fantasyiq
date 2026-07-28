@@ -40,12 +40,25 @@ class ModelNotFound(LookupError):
     pass
 
 
+class ExplainUnsupported(NotImplementedError):
+    """Raised when the active model cannot produce per-feature attribution.
+
+    The heuristic fallbacks and the PyTorch model have no tree structure to read
+    contributions from. Callers turn this into a 501 rather than inventing an
+    explanation, because a made-up reason is worse than no reason.
+    """
+
+
 @dataclass
 class LoadedModel:
     version: str
     framework: str
     predict_fn: Any
     metadata: dict
+    # The underlying estimator, when there is one worth keeping a handle on. Only the
+    # tree models set it, and only so per-feature attribution can read the trees; the
+    # prediction path goes through predict_fn for every framework alike.
+    estimator: Any = None
 
 
 def _load_torch(path: Path, metadata: dict) -> Any:
@@ -70,13 +83,14 @@ def _load_torch(path: Path, metadata: dict) -> Any:
     return predict
 
 
-def _load_sklearn(path: Path, metadata: dict) -> Any:
+def _load_sklearn(path: Path, metadata: dict) -> tuple[Any, Any]:
+    """Returns (predict_fn, estimator) - the estimator is needed for explainability."""
     estimator = joblib.load(path)
 
     def predict(x: np.ndarray) -> np.ndarray:
         return np.asarray(estimator.predict(x)).ravel()
 
-    return predict
+    return predict, estimator
 
 
 def _preseason_heuristic(x: np.ndarray) -> np.ndarray:
@@ -221,11 +235,13 @@ class ModelRegistry:
         joblib_path = self.model_dir / f"{version}.joblib"
         torch_path = self.model_dir / f"{version}.pt"
         if joblib_path.exists():
+            predict_fn, estimator = _load_sklearn(joblib_path, metadata)
             model = LoadedModel(
                 version,
                 metadata.get("framework", "sklearn"),
-                _load_sklearn(joblib_path, metadata),
+                predict_fn,
                 metadata,
+                estimator=estimator,
             )
         elif torch_path.exists():
             model = LoadedModel(version, "pytorch", _load_torch(torch_path, metadata), metadata)
@@ -252,6 +268,40 @@ class ModelRegistry:
         row = preseason_row(features)
         value = float(model.predict_fn(row)[0])
         return value, self._preseason_confidence(features, model), model.version
+
+    def explain_preseason(
+        self, version: str, features: dict, top: int = 6
+    ) -> tuple[float, float, list[tuple[str, float, float]], str]:
+        """Break a preseason projection into exact per-feature contributions.
+
+        Not feature importance, which is a global property of the model and identical for
+        every player. These are SHAP values from the tree structure itself: for this one
+        player they sum to precisely his projection, so "why is he here" has an arithmetic
+        answer rather than a plausible story.
+
+        This is how the draft board explains itself, and it is how the Nacua problem was
+        found - the board said "16 games last season" for everybody while the model was
+        quietly docking him 2.4 points for being a fifth-round pick in 2023. Importance
+        rankings could never have shown that; only per-player attribution could.
+
+        Returns (baseline, projection, [(feature, value, contribution)], version).
+        """
+        model = self.get(version)
+        if model.framework != "xgboost":
+            raise ExplainUnsupported(
+                f"{model.version} is a {model.framework} model; per-feature attribution "
+                "is only implemented for the gradient-boosted preseason model"
+            )
+        import xgboost as xgb
+
+        order = list(model.metadata.get("feature_order") or PRESEASON_FEATURE_ORDER)
+        row = preseason_row(features)
+        booster = model.estimator.get_booster()
+        contribs = booster.predict(xgb.DMatrix(row, feature_names=order), pred_contribs=True)[0]
+        baseline = float(contribs[-1])
+        pairs = [(name, float(row[0][i]), float(contribs[i])) for i, name in enumerate(order)]
+        pairs.sort(key=lambda p: -abs(p[2]))
+        return baseline, float(contribs.sum()), pairs[:top], model.version
 
     @staticmethod
     def _preseason_confidence(features: dict, model: LoadedModel) -> float:

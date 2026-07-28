@@ -60,7 +60,6 @@ INSERT INTO player_context (
     career_weighted_ppg, career_weighted_targets_per_game, career_weighted_carries_per_game,
     career_weighted_target_share, career_best_ppg, career_seasons, career_games,
     prior_points_per_target, career_points_per_target, efficiency_delta,
-    qb_quality, team_departed_target_share, team_departed_carry_share,
     teammate_top_target_share, teammate_top_carry_share,
     created_at, updated_at
 ) VALUES (
@@ -73,7 +72,6 @@ INSERT INTO player_context (
     :career_weighted_ppg, :career_weighted_targets_per_game, :career_weighted_carries_per_game,
     :career_weighted_target_share, :career_best_ppg, :career_seasons, :career_games,
     :prior_points_per_target, :career_points_per_target, :efficiency_delta,
-    :qb_quality, :team_departed_target_share, :team_departed_carry_share,
     :teammate_top_target_share, :teammate_top_carry_share,
     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 )
@@ -110,7 +108,6 @@ ON CONFLICT (player_id, season) DO UPDATE SET
     prior_points_per_target          = EXCLUDED.prior_points_per_target,
     career_points_per_target         = EXCLUDED.career_points_per_target,
     efficiency_delta                 = EXCLUDED.efficiency_delta,
-    qb_quality                       = EXCLUDED.qb_quality,
     team_departed_target_share       = EXCLUDED.team_departed_target_share,
     team_departed_carry_share        = EXCLUDED.team_departed_carry_share,
     teammate_top_target_share        = EXCLUDED.teammate_top_target_share,
@@ -600,7 +597,6 @@ def build(
         "prior_points_per_target": 0.0,
         "career_points_per_target": 0.0,
         "efficiency_delta": 0.0,
-        "qb_quality": 0.0,
         "team_departed_target_share": 0.0,
         "team_departed_carry_share": 0.0,
         "teammate_top_target_share": 0.0,
@@ -665,7 +661,6 @@ def build(
             "prior_points_per_target": float(r.prior_points_per_target),
             "career_points_per_target": float(r.career_points_per_target),
             "efficiency_delta": float(r.efficiency_delta),
-            "qb_quality": float(r.qb_quality),
             "team_departed_target_share": float(r.team_departed_target_share),
             "team_departed_carry_share": float(r.team_departed_carry_share),
             "teammate_top_target_share": float(r.teammate_top_target_share),

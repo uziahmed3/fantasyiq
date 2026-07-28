@@ -249,17 +249,12 @@ def build_efficiency(engine: Engine, season: int, career: pd.DataFrame) -> pd.Da
 
 
 # ------------------------------------------------------------------ situation
-QB_QUALITY_SQL = text("""
-SELECT p.team AS team,
-       SUM(ps.fantasy_points) AS qb_points,
-       SUM(ps.yards)          AS qb_yards,
-       COUNT(*)               AS qb_games
-FROM player_stats ps
-JOIN players p ON p.id = ps.player_id
-WHERE ps.season = :prior_season AND ps.week <= :max_week
-  AND p.position = 'QB' AND p.team IS NOT NULL
-GROUP BY p.team
-""")
+# A qb_quality feature lived here and was removed. It rated quarterbacks by their own
+# fantasy points, but this project scores receiving and rushing only - so a QB's "points"
+# were essentially his scrambles. Minnesota came out at 2.2 and Cincinnati at 0.9, which
+# is meaningless. Rating quarterbacks properly needs passing yards and touchdowns
+# ingested; until then, team_pass_attempts_prior carries the team-volume signal and
+# qb_changed flags the risk. Better a missing feature than a fake one.
 
 PRIOR_ROSTER_SHARES_SQL = text("""
 SELECT ps.player_id, p.position, p.team AS current_team,
@@ -284,7 +279,6 @@ def build_situation(engine: Engine, season: int) -> pd.DataFrame:
 
     Three signals, all derived from data already stored:
 
-      qb_quality                  - the team's quarterback production per game last
                                     season. A receiver's ceiling is capped by his QB, and
                                     "changed" alone does not say whether that is good news.
       team_departed_target_share  - share that belonged to players no longer on the roster.
@@ -296,7 +290,6 @@ def build_situation(engine: Engine, season: int) -> pd.DataFrame:
     """
     params = {"prior_season": season - 1, "max_week": REGULAR_SEASON_WEEKS}
     with engine.connect() as conn:
-        qb = pd.read_sql(QB_QUALITY_SQL, conn, params=params)
         shares = pd.read_sql(PRIOR_ROSTER_SHARES_SQL, conn, params=params)
         roster = pd.read_sql(AGES_SQL, conn)
 
@@ -339,13 +332,6 @@ def build_situation(engine: Engine, season: int) -> pd.DataFrame:
         .rename(columns={"current_team": "team"})
     )
 
-    if not qb.empty:
-        qb["qb_quality"] = (qb["qb_points"] / qb["qb_games"].replace(0, np.nan)).fillna(0.0)
-        qb = qb[["team", "qb_quality"]]
-    else:
-        log.warning("no_qb_quality", season=season, hint="include QB in INGEST_POSITIONS")
-        qb = pd.DataFrame(columns=["team", "qb_quality"])
-
     # Strongest remaining competitor at the same position, per player.
     staying = shares[shares["still_here"]]
     competitor_rows = []
@@ -367,13 +353,11 @@ def build_situation(engine: Engine, season: int) -> pd.DataFrame:
         del team, position
     competitors = pd.DataFrame(competitor_rows)
 
-    out = roster[["player_id", "team"]].merge(qb, on="team", how="left")
-    out = out.merge(departed, on="team", how="left")
+    out = roster[["player_id", "team"]].merge(departed, on="team", how="left")
     if not competitors.empty:
         out = out.merge(competitors, on="player_id", how="left")
 
     for col in (
-        "qb_quality",
         "team_departed_target_share",
         "team_departed_carry_share",
         "teammate_top_target_share",
@@ -386,7 +370,6 @@ def build_situation(engine: Engine, season: int) -> pd.DataFrame:
     log.info(
         "situation_built",
         season=season,
-        teams_with_qb=int((out["qb_quality"] > 0).sum()),
         players=len(out),
     )
     return out.drop(columns=["team"])

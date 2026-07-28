@@ -77,7 +77,6 @@ class PreseasonFeatureVector(BaseModel):
     prior_points_per_target: float | None = None
     career_points_per_target: float | None = None
     efficiency_delta: float | None = None
-    qb_quality: float | None = None
     team_departed_target_share: float | None = None
     team_departed_carry_share: float | None = None
     teammate_top_target_share: float | None = None

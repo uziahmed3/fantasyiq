@@ -57,6 +57,7 @@ class StubMLClient:
     def __init__(self) -> None:
         self.calls: list[FeatureVector] = []
         self.preseason_calls: list[PreseasonFeatureVector] = []
+        self.explain_calls: list[PreseasonFeatureVector] = []
         self.fail_with: Exception | None = None
 
     def predict(self, features: FeatureVector, model_version: str | None = None) -> dict:
@@ -85,6 +86,43 @@ class StubMLClient:
             "model_version": model_version or "preseason_v1",
             "framework": "stub",
             "basis": "rookie - draft capital" if rookie else "prior season",
+        }
+
+    def explain_preseason(
+        self,
+        features: PreseasonFeatureVector,
+        model_version: str | None = None,
+        top: int = 6,
+    ) -> dict:
+        if self.fail_with:
+            raise self.fail_with
+        self.explain_calls.append(features)
+        drivers = [
+            {
+                "feature": "career_weighted_ppg",
+                "label": "career scoring rate",
+                "value": features.career_weighted_ppg or 0.0,
+                "display_value": f"{features.career_weighted_ppg or 0.0:.1f}",
+                "contribution": 5.5,
+                "explanation": "career scoring rate raises the projection by 5.5",
+            },
+            {
+                "feature": "teammate_top_target_share",
+                "label": "competition for targets",
+                "value": features.teammate_top_target_share or 0.0,
+                "display_value": "20%",
+                "contribution": -1.25,
+                "explanation": "competition for targets lowers the projection by 1.2",
+            },
+        ][:top]
+        return {
+            "prediction": 17.4,
+            "baseline": 6.3,
+            "model_version": model_version or "preseason_v1",
+            "headline": "career scoring rate 24.2; held back by competition for targets 20%",
+            "drivers": drivers,
+            "drivers_shown": len(drivers),
+            "total_features": 31,
         }
 
     def health(self) -> bool:

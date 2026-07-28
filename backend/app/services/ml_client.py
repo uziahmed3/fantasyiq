@@ -95,6 +95,44 @@ class MLClient:
         finally:
             ML_LATENCY.observe(time.perf_counter() - started)
 
+    def explain_preseason(
+        self, features: PreseasonFeatureVector, model_version: str | None = None, top: int = 6
+    ) -> dict:
+        """Ask the model why it produced the number it did.
+
+        A separate call rather than data folded into the prediction response, because the
+        cost is not the same: attribution walks every tree for every feature, so making
+        the hot leaderboard path pay for it to serve an explanation nobody has asked to
+        see would be the wrong trade. This is invoked when a user opens one player.
+
+        A failure here is not a prediction failure - the projection is already valid and
+        on screen. So it is counted under its own label instead of inflating the
+        prediction-failure metric that alerting watches.
+        """
+        payload = {
+            "features": features.model_dump(),
+            "model_version": model_version or settings.active_preseason_model_version,
+            "top": top,
+        }
+        started = time.perf_counter()
+        try:
+            with httpx.Client(timeout=self.timeout, trust_env=self.trust_env) as client:
+                resp = client.post(f"{self.base_url}/predict/preseason/explain", json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPStatusError as exc:
+            PREDICTION_FAILURES.labels(reason=f"explain_http_{exc.response.status_code}").inc()
+            # 501 means the active model has no tree structure to read - a real answer,
+            # not an outage, so it is passed through with its own status.
+            raise MLServiceError(
+                f"explanation unavailable ({exc.response.status_code})",
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            PREDICTION_FAILURES.labels(reason="explain_error").inc()
+            raise MLServiceError(f"explanation unavailable: {exc}") from exc
+        finally:
+            ML_LATENCY.observe(time.perf_counter() - started)
+
     def health(self) -> bool:
         """Never raises. /ready calls this, and a readiness probe that 500s is useless."""
         try:
