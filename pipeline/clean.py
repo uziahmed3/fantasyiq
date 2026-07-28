@@ -85,7 +85,15 @@ def clean_rosters(rosters: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates("player_id", keep="last")
     rename = {"player_name": "name", "height": "height_inches", "weight": "weight_lbs"}
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
-    for col in ["age", "height_inches", "weight_lbs"]:
+    # Draft columns included: they are how a rookie gets projected at all.
+    for col in [
+        "age",
+        "height_inches",
+        "weight_lbs",
+        "draft_round",
+        "draft_pick",
+        "rookie_season",
+    ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
     return df.reset_index(drop=True)

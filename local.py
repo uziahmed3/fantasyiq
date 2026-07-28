@@ -289,7 +289,11 @@ def load_real(env: dict[str, str], source: str) -> None:
     )
     if rc != 0:
         die(
-            "Could not load NFL data - your network is probably blocking the download.\n\n"
+            "Could not load NFL data. The error above says which stage failed.\n\n"
+            "If it mentions a schema or a missing column, the download worked and\n"
+            "upstream changed their file format - none of the options below will help,\n"
+            "so send me the error instead.\n\n"
+            "If it is a timeout, 403 or connection failure, the network is the problem:\n\n"
             "  1) Offline:  python local.py --data-urls\n"
             "               download those files in your browser into data/manual/\n"
             "               python local.py --offline\n\n"

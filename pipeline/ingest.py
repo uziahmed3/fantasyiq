@@ -55,7 +55,18 @@ WEEKLY_COLUMNS = [
     "fantasy_points_ppr",
 ]
 
-ROSTER_COLUMNS = ["player_id", "player_name", "position", "team", "age", "height", "weight"]
+ROSTER_COLUMNS = [
+    "player_id",
+    "player_name",
+    "position",
+    "team",
+    "age",
+    "height",
+    "weight",
+    "draft_round",
+    "draft_pick",
+    "rookie_season",
+]
 
 # Cache for automatically downloaded release assets (distinct from MANUAL_DIR, which
 # holds files the user placed there by hand).
@@ -139,7 +150,8 @@ def _load_manual(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
         [pd.read_parquet(MANUAL_DIR / f"roster_{s}.parquet") for s in seasons],
         ignore_index=True,
     )
-    return weekly, rosters
+    # Hand-downloaded files are the same assets, so they need the same normalisation.
+    return _normalise_weekly(weekly), _normalise_rosters(rosters)
 
 
 class AllCandidatesFailed(RuntimeError):
@@ -196,40 +208,85 @@ def _fetch_weekly(seasons: list[int]) -> pd.DataFrame:
     return _normalise_weekly(pd.concat(frames, ignore_index=True))
 
 
+# Candidate source names for each column we need, in priority order. nflverse has
+# renamed these across releases (and the weekly and roster files disagree with each
+# other), so the mapping is data-driven rather than a single assumed schema.
+WEEKLY_ALIASES: dict[str, tuple[str, ...]] = {
+    "player_id": ("player_id", "gsis_id"),
+    "player_display_name": ("player_display_name", "player_name", "full_name"),
+    "recent_team": ("recent_team", "team"),
+    "opponent_team": ("opponent_team", "opponent"),
+    "receptions": ("receptions", "rec"),
+    "receiving_yards": ("receiving_yards", "rec_yds"),
+    "receiving_tds": ("receiving_tds", "rec_td"),
+    "rushing_yards": ("rushing_yards", "rush_yds"),
+    "rushing_tds": ("rushing_tds", "rush_td"),
+}
+
+ROSTER_ALIASES: dict[str, tuple[str, ...]] = {
+    # The roster release keys on gsis_id; the weekly stats call the same thing player_id.
+    "player_id": ("player_id", "gsis_id"),
+    "player_name": ("player_name", "full_name", "player_display_name", "football_name"),
+    "team": ("team", "recent_team", "club_code"),
+    "height": ("height", "height_inches"),
+    "weight": ("weight", "weight_lbs"),
+    # Draft capital is present on seasonal rosters under these names.
+    "draft_pick": ("draft_pick", "draft_number"),
+    "rookie_season": ("rookie_season", "rookie_year", "entry_year"),
+    "years_of_experience": ("years_of_experience", "years_exp"),
+}
+
+
+def _apply_aliases(df: pd.DataFrame, aliases: dict[str, tuple[str, ...]]) -> pd.DataFrame:
+    """Rename whichever alias is present to the canonical name we use downstream."""
+    renames: dict[str, str] = {}
+    for canonical, candidates in aliases.items():
+        if canonical in df.columns:
+            continue
+        for candidate in candidates:
+            if candidate in df.columns:
+                renames[candidate] = canonical
+                break
+    if renames:
+        log.info("columns_renamed", mapping=renames)
+        df = df.rename(columns=renames)
+    return df
+
+
+class SchemaMismatch(KeyError):
+    """The download worked but the file does not have the columns we need.
+
+    Its own exception type because the remedy is completely different from a network
+    failure, and conflating the two sends people off downloading files by hand when the
+    real problem is upstream renaming a column.
+    """
+
+
+def _require(df: pd.DataFrame, columns: tuple[str, ...], what: str) -> None:
+    missing = [c for c in columns if c not in df.columns]
+    if missing:
+        raise SchemaMismatch(
+            f"{what} is missing required column(s) {missing}. The download succeeded, so "
+            f"this is an upstream schema change, not a network problem. Columns present: "
+            f"{sorted(df.columns)[:25]}"
+        )
+
+
 def _normalise_weekly(df: pd.DataFrame) -> pd.DataFrame:
     """Reconcile column names across the old `player_stats` and new `stats_player` schemas.
 
     Upstream renamed several columns in the move. Mapping them here means the cleaner and
     everything downstream see one stable shape regardless of which release answered.
     """
-    aliases = {
-        "player_name": "player_display_name",
-        "player_display_name": "player_display_name",
-        "team": "recent_team",
-        "recent_team": "recent_team",
-        "opponent": "opponent_team",
-        "opponent_team": "opponent_team",
-        "receiving_tds": "receiving_tds",
-        "rec_td": "receiving_tds",
-        "receiving_yards": "receiving_yards",
-        "rec_yds": "receiving_yards",
-        "receptions": "receptions",
-        "rec": "receptions",
-        "targets": "targets",
-        "rushing_yards": "rushing_yards",
-        "rush_yds": "rushing_yards",
-        "rushing_tds": "rushing_tds",
-        "rush_td": "rushing_tds",
-        "fantasy_points_ppr": "fantasy_points_ppr",
-    }
-    renames = {
-        src: dst
-        for src, dst in aliases.items()
-        if src in df.columns and src != dst and dst not in df.columns
-    }
-    if renames:
-        log.info("weekly_columns_renamed", mapping=renames)
-        df = df.rename(columns=renames)
+    df = _apply_aliases(df, WEEKLY_ALIASES)
+    _require(df, ("player_id", "season", "week", "position"), "weekly stats")
+    return df
+
+
+def _normalise_rosters(df: pd.DataFrame) -> pd.DataFrame:
+    """Reconcile roster column names, and derive anything the file does not carry."""
+    df = _apply_aliases(df, ROSTER_ALIASES)
+    _require(df, ("player_id",), "rosters")
     return df
 
 
@@ -240,7 +297,7 @@ def _fetch_rosters(seasons: list[int]) -> pd.DataFrame:
         )
         for s in seasons
     ]
-    return pd.concat(frames, ignore_index=True)
+    return _normalise_rosters(pd.concat(frames, ignore_index=True))
 
 
 def _derive_age(rosters: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
@@ -260,6 +317,11 @@ def _derive_age(rosters: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
 def _load_network(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
     try:
         return _fetch_weekly(seasons), _fetch_rosters(seasons)
+    except SchemaMismatch as exc:
+        # Not a network problem - do not send the user off downloading files by hand.
+        log.error("schema_mismatch", error=str(exc))
+        print(f"\nUpstream data schema changed.\n\n{exc}\n", file=sys.stderr)
+        raise
     except Exception as exc:  # noqa: BLE001 - any transport failure gets the same advice
         log.error("network_ingest_failed", error=str(exc), error_type=type(exc).__name__)
         print(

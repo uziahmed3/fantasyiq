@@ -142,12 +142,15 @@ def test_normalise_weekly_maps_new_schema_names():
         assert expected in out.columns, f"{expected} missing after normalisation"
 
 
-def test_normalise_weekly_leaves_old_schema_alone():
+def test_normalise_weekly_leaves_canonical_schema_alone():
     old = pd.DataFrame(
         [
             {
                 "player_id": "1",
                 "player_display_name": "A",
+                "position": "WR",
+                "season": 2024,
+                "week": 1,
                 "recent_team": "MIN",
                 "opponent_team": "GB",
                 "receptions": 6,
@@ -158,6 +161,81 @@ def test_normalise_weekly_leaves_old_schema_alone():
     )
     out = ingest._normalise_weekly(old)
     assert out.equals(old)
+
+
+def test_normalise_rosters_maps_gsis_id():
+    """The roster release keys on gsis_id while the weekly stats call it player_id.
+    Getting this wrong crashed the real ingest with KeyError: ['player_id']."""
+    real_shape = pd.DataFrame(
+        [
+            {
+                "season": 2024,
+                "team": "MIN",
+                "position": "WR",
+                "full_name": "Justin Jefferson",
+                "gsis_id": "00-0036322",
+                "height": 73,
+                "weight": 195,
+                "birth_date": "1999-06-16",
+                "years_exp": 4,
+                "draft_number": 22,
+                "rookie_year": 2020,
+            }
+        ]
+    )
+    out = ingest._normalise_rosters(real_shape)
+    assert out.loc[0, "player_id"] == "00-0036322"
+    assert out.loc[0, "player_name"] == "Justin Jefferson"
+    assert out.loc[0, "draft_pick"] == 22
+    assert out.loc[0, "rookie_season"] == 2020
+    assert out.loc[0, "years_of_experience"] == 4
+
+
+def test_normalise_rosters_raises_a_schema_error_not_a_keyerror():
+    """A download that succeeds but returns unexpected columns must say so, rather than
+    being reported as a network failure."""
+    with pytest.raises(ingest.SchemaMismatch) as exc:
+        ingest._normalise_rosters(pd.DataFrame([{"some_other_id": "x", "team": "MIN"}]))
+    assert "not a network problem" in str(exc.value)
+    assert "some_other_id" in str(exc.value)
+
+
+def test_normalise_weekly_requires_its_key_columns():
+    with pytest.raises(ingest.SchemaMismatch):
+        ingest._normalise_weekly(pd.DataFrame([{"targets": 5}]))
+
+
+def test_weekly_accepts_the_new_release_schema():
+    new = pd.DataFrame(
+        [
+            {
+                "gsis_id": "00-1",
+                "player_name": "A",
+                "position": "WR",
+                "season": 2025,
+                "week": 1,
+                "team": "MIN",
+                "opponent": "GB",
+                "rec": 6,
+                "rec_yds": 70.0,
+                "rec_td": 1,
+                "rush_yds": 0.0,
+                "rush_td": 0,
+                "targets": 8,
+            }
+        ]
+    )
+    out = ingest._normalise_weekly(new)
+    for expected in (
+        "player_id",
+        "player_display_name",
+        "recent_team",
+        "opponent_team",
+        "receptions",
+        "receiving_yards",
+        "receiving_tds",
+    ):
+        assert expected in out.columns, f"{expected} missing"
 
 
 def test_status_reports_missing_files(manual_dir):
