@@ -41,7 +41,7 @@ WITH ranked AS (
         ps.targets, ps.receptions, ps.yards, ps.touchdowns, ps.fantasy_points,
         ROW_NUMBER() OVER (PARTITION BY ps.player_id ORDER BY ps.week DESC) AS recency
     FROM player_stats ps
-    WHERE ps.season = :season AND ps.week < :week
+    WHERE ps.season = :season AND ps.week < :week AND ps.week <= 18
 ),
 rolling AS (
     SELECT
@@ -62,7 +62,7 @@ defence AS (
         opponent,
         RANK() OVER (ORDER BY AVG(fantasy_points) DESC) AS opponent_rank
     FROM player_stats
-    WHERE season = :season AND week < :week AND opponent IS NOT NULL
+    WHERE season = :season AND week < :week AND week <= 18 AND opponent IS NOT NULL
     GROUP BY opponent
 )
 SELECT
@@ -82,6 +82,8 @@ FROM players p
 JOIN rolling r ON r.player_id = p.id
 LEFT JOIN defence d ON d.opponent = p.team
 WHERE r.games_played >= 1
+  -- Same reason as the preseason job: QBs are ingested for qb_changed, not scored.
+  AND p.position IN ('WR', 'RB', 'TE')
 ORDER BY r.season_avg_points DESC
 """)
 

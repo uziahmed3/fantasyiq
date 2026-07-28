@@ -274,3 +274,24 @@ def test_census_separates_real_from_synthetic(tmp_path):
         conn.execute(text("CREATE TABLE players (id INTEGER PRIMARY KEY, external_id TEXT)"))
         conn.execute(text("INSERT INTO players VALUES (1, '00-1'), (2, 'DEMO-1'), (3, 'DEMO-2')"))
     assert seed_demo._census(engine) == (1, 2)
+
+
+def test_build_all_includes_the_season_being_projected(tmp_path, monkeypatch):
+    """The draft-board season has no games, so it never appears in seasons_with_data.
+    Leaving it out meant `context --all` silently skipped the one season that matters -
+    and stale rows survived a regular-season fix, showing "21 games last season"."""
+    from sqlalchemy import create_engine, text
+
+    import context
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path}/ba.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE player_stats (player_id INT, season INT, week INT)"))
+        for season in (2023, 2024, 2025):
+            conn.execute(text("INSERT INTO player_stats VALUES (1, :s, 1)"), {"s": season})
+
+    built = []
+    monkeypatch.setattr(context, "build", lambda _e, season, **kw: built.append(season) or 1)
+    context.build_all(engine)
+    # 2023 is the earliest (nothing before it); 2026 is the projection season.
+    assert built == [2024, 2025, 2026]

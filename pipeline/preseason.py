@@ -76,6 +76,11 @@ SELECT
 FROM player_context pc
 JOIN players p ON p.id = pc.player_id
 WHERE pc.season = :season
+  -- Quarterbacks are ingested so qb_changed can detect a change of starter, but never
+  -- projected: fantasy points here come from receiving and rushing only, so a QB number
+  -- would silently omit passing and be badly wrong. Better to show nothing than a
+  -- confidently incorrect ranking.
+  AND p.position IN ('WR', 'RB', 'TE')
 ORDER BY pc.prior_points_per_game DESC
 """)
 

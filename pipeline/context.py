@@ -37,6 +37,17 @@ import ingest
 import load
 from logging_setup import log
 
+# The NFL regular season is 18 weeks; nflverse data continues through the playoffs
+# (weeks 19-22). Including those inflated prior-season rates and produced "19 games last
+# season" on the draft board, which is impossible - and it rewarded players whose teams
+# made a deep run rather than players who were good.
+REGULAR_SEASON_WEEKS = 18
+
+# Quarterbacks are ingested (qb_changed needs them) but never projected: fantasy points
+# here are computed from receiving and rushing only, so a QB's number would omit passing
+# entirely and be badly wrong. Excluded at the source rather than hidden in the UI.
+PROJECTED_POSITIONS = ("WR", "RB", "TE")
+
 UPSERT_CONTEXT = text("""
 INSERT INTO player_context (
     player_id, season, team,
@@ -92,7 +103,7 @@ SELECT
     p.team AS current_team
 FROM player_stats ps
 JOIN players p ON p.id = ps.player_id
-WHERE ps.season = :prior_season
+WHERE ps.season = :prior_season AND ps.week <= :max_week
 """)
 
 TEAM_SQL = text("""
@@ -100,7 +111,7 @@ SELECT p.team AS team, SUM(ps.targets) AS team_targets,
        SUM(ps.fantasy_points) AS team_points
 FROM player_stats ps
 JOIN players p ON p.id = ps.player_id
-WHERE ps.season = :prior_season AND p.team IS NOT NULL
+WHERE ps.season = :prior_season AND p.team IS NOT NULL AND ps.week <= :max_week
 GROUP BY p.team
 """)
 
@@ -108,8 +119,9 @@ GROUP BY p.team
 def _prior_production(engine: Engine, prior_season: int) -> pd.DataFrame:
     """Per-player prior-season aggregates, including share of team targets."""
     with engine.connect() as conn:
-        rows = pd.read_sql(PRIOR_SQL, conn, params={"prior_season": prior_season})
-        teams = pd.read_sql(TEAM_SQL, conn, params={"prior_season": prior_season})
+        params = {"prior_season": prior_season, "max_week": REGULAR_SEASON_WEEKS}
+        rows = pd.read_sql(PRIOR_SQL, conn, params=params)
+        teams = pd.read_sql(TEAM_SQL, conn, params=params)
 
     if rows.empty:
         return pd.DataFrame()
@@ -151,6 +163,7 @@ SELECT p.team AS team, p.external_id AS qb_id, SUM(ps.targets) AS ignored,
 FROM player_stats ps
 JOIN players p ON p.id = ps.player_id
 WHERE ps.season = :season AND p.position = 'QB' AND p.team IS NOT NULL
+  AND ps.week <= :max_week
 GROUP BY p.team, p.external_id
 """)
 
@@ -166,8 +179,14 @@ def _team_situation(engine: Engine, prior_season: int) -> pd.DataFrame:
     team pass volume falls back to team target volume - degraded, not broken.
     """
     with engine.connect() as conn:
-        prior = pd.read_sql(QB_SQL, conn, params={"season": prior_season})
-        earlier = pd.read_sql(QB_SQL, conn, params={"season": prior_season - 1})
+        prior = pd.read_sql(
+            QB_SQL, conn, params={"season": prior_season, "max_week": REGULAR_SEASON_WEEKS}
+        )
+        earlier = pd.read_sql(
+            QB_SQL,
+            conn,
+            params={"season": prior_season - 1, "max_week": REGULAR_SEASON_WEEKS},
+        )
 
     if prior.empty:
         log.warning(
@@ -617,11 +636,18 @@ def seasons_with_data(engine: Engine) -> list[int]:
 
 
 def build_all(engine: Engine, use_optional_feeds: bool = True) -> dict[int, int]:
-    """Build context for every season that has a prior season to draw on.
+    """Build context for every season we can, including the one being projected.
 
-    The preseason model trains on (season S-1 -> season S) pairs, so it needs context for
-    as many seasons as possible - not just the one being projected. The earliest ingested
-    season is skipped because there is nothing before it.
+    Two groups, and missing the second was a real bug:
+
+      * seasons that have games, except the earliest (nothing precedes it) - these are the
+        training pairs the preseason model learns from.
+      * the NEXT season, which by definition has no games yet. It is the whole point of a
+        draft board, and because it never appears in seasons_with_data it was silently
+        skipped - so `context --all` left the projection season holding whatever stale
+        values an earlier run had written. On real data that meant "21 games last season"
+        for players whose team went deep in the playoffs, long after the regular-season
+        filter was added.
     """
     seasons = seasons_with_data(engine)
     if len(seasons) < 2:
@@ -631,8 +657,9 @@ def build_all(engine: Engine, use_optional_feeds: bool = True) -> dict[int, int]
             hint="ingest at least two consecutive seasons",
         )
         return {}
+    targets = [*seasons[1:], seasons[-1] + 1]
     built = {}
-    for season in seasons[1:]:
+    for season in targets:
         built[season] = build(engine, season, use_optional_feeds=use_optional_feeds)
     return built
 

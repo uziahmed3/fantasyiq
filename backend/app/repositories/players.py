@@ -13,6 +13,20 @@ from app.models import Player, PlayerContext, PlayerStats, Prediction
 # Week 0 means "the season as a whole" - see pipeline/preseason.py.
 SEASON_PROJECTION_WEEK = 0
 
+# The regular season. Playoff weeks exist in the data but are not what fantasy is scored
+# on, and counting them produced impossible totals like "19 games last season".
+REGULAR_SEASON_WEEKS = 18
+
+# FLEX is any of these. Quarterbacks are deliberately absent: points here are computed
+# from receiving and rushing only, so a QB total would omit passing and mislead.
+FLEX_POSITIONS = ("WR", "RB", "TE")
+
+
+def position_filter(position: str) -> tuple[str, ...]:
+    """Resolve a position selector to the set of positions it covers."""
+    upper = position.upper()
+    return FLEX_POSITIONS if upper == "FLEX" else (upper,)
+
 
 class PlayerRepository:
     def __init__(self, db: Session) -> None:
@@ -133,6 +147,57 @@ class StatsRepository:
         return rows.index(opp) + 1 if opp in rows else 16
 
 
+class LeaderRepository:
+    """Completed-season actuals. No model, no projection - just what happened.
+
+    Regular season only, and aggregated in SQL so a full-league leaderboard is one query
+    rather than pulling every game row into Python.
+    """
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def _base(self, season: int, position: str):
+        return (
+            select(
+                Player.id.label("player_id"),
+                Player.name,
+                Player.team,
+                Player.position,
+                func.count(PlayerStats.id).label("games"),
+                func.sum(PlayerStats.fantasy_points).label("total_points"),
+                func.avg(PlayerStats.fantasy_points).label("points_per_game"),
+                func.sum(PlayerStats.targets).label("targets"),
+                func.sum(PlayerStats.receptions).label("receptions"),
+                func.sum(PlayerStats.yards).label("yards"),
+                func.sum(PlayerStats.touchdowns).label("touchdowns"),
+            )
+            .join(PlayerStats, PlayerStats.player_id == Player.id)
+            .where(
+                PlayerStats.season == season,
+                PlayerStats.week <= REGULAR_SEASON_WEEKS,
+                Player.position.in_(position_filter(position)),
+            )
+            .group_by(Player.id, Player.name, Player.team, Player.position)
+        )
+
+    def count(self, season: int, position: str) -> int:
+        subquery = self._base(season, position).subquery()
+        return int(self.db.scalar(select(func.count()).select_from(subquery)) or 0)
+
+    def leaders(self, season: int, position: str, limit: int = 20, offset: int = 0) -> list:
+        stmt = (
+            self._base(season, position)
+            .order_by(func.sum(PlayerStats.fantasy_points).desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(self.db.execute(stmt).all())
+
+    def latest_completed_season(self) -> int | None:
+        return self.db.scalar(select(func.max(PlayerStats.season)))
+
+
 class ContextRepository:
     """Preseason context: what was knowable before the season started."""
 
@@ -217,8 +282,28 @@ class PredictionRepository:
         latest = self.db.scalar(select(func.max(PlayerStats.season)))
         return int(latest) + 1 if latest is not None else 0
 
+    def season_board_count(self, season: int, model_version: str, position: str) -> int:
+        return int(
+            self.db.scalar(
+                select(func.count(Prediction.id))
+                .join(Player, Player.id == Prediction.player_id)
+                .where(
+                    Prediction.season == season,
+                    Prediction.week == SEASON_PROJECTION_WEEK,
+                    Prediction.model_version == model_version,
+                    Player.position.in_(position_filter(position)),
+                )
+            )
+            or 0
+        )
+
     def season_board(
-        self, season: int, model_version: str, position: str | None = None, limit: int = 100
+        self,
+        season: int,
+        model_version: str,
+        position: str = "FLEX",
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[tuple[Prediction, Player, PlayerContext | None]]:
         """The draft board: season-long projections, stored at the week=0 sentinel.
 
@@ -237,11 +322,12 @@ class PredictionRepository:
                 Prediction.season == season,
                 Prediction.week == SEASON_PROJECTION_WEEK,
                 Prediction.model_version == model_version,
+                Player.position.in_(position_filter(position)),
             )
+            .order_by(Prediction.prediction.desc())
+            .limit(limit)
+            .offset(offset)
         )
-        if position:
-            stmt = stmt.where(Player.position == position.upper())
-        stmt = stmt.order_by(Prediction.prediction.desc()).limit(limit)
         return list(self.db.execute(stmt).all())
 
     def history(self, player_id: int, limit: int = 20) -> list[Prediction]:

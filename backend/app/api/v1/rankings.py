@@ -3,8 +3,15 @@ from fastapi import APIRouter, Query
 from app.api.deps import DbSession
 from app.core.cache import cache_get, cache_set, rankings_key
 from app.core.config import settings
-from app.repositories.players import PredictionRepository, StatsRepository
-from app.schemas.player import RankingRow, RankingsOut, SeasonRankingRow, SeasonRankingsOut
+from app.repositories.players import LeaderRepository, PredictionRepository, StatsRepository
+from app.schemas.player import (
+    RankingRow,
+    RankingsOut,
+    SeasonLeaderRow,
+    SeasonLeadersOut,
+    SeasonRankingRow,
+    SeasonRankingsOut,
+)
 
 router = APIRouter(prefix="/rankings", tags=["rankings"])
 
@@ -76,8 +83,9 @@ def _basis(ctx) -> str | None:
 def season_rankings(
     db: DbSession,
     season: int | None = Query(None, description="Defaults to the season being projected"),
-    position: str = Query("WR", min_length=2, max_length=4),
-    limit: int = Query(100, ge=1, le=400),
+    position: str = Query("FLEX", min_length=2, max_length=4, description="WR/RB/TE/FLEX"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
 ) -> SeasonRankingsOut:
     """Season-long projections, produced before the season starts.
 
@@ -95,11 +103,13 @@ def season_rankings(
     if season is None:
         season = repo.next_unplayed_season()
 
-    key = rankings_key(f"season:{position}:{season}", 0, limit)
+    offset = (page - 1) * per_page
+    key = rankings_key(f"season:{position}:{season}:{page}", 0, per_page)
     if (cached := cache_get(key)) is not None:
         return SeasonRankingsOut(**cached)
 
-    rows = repo.season_board(season, model_version, position, limit)
+    total = repo.season_board_count(season, model_version, position)
+    rows = repo.season_board(season, model_version, position, per_page, offset)
     games = settings.games_per_season
 
     out = SeasonRankingsOut(
@@ -108,6 +118,9 @@ def season_rankings(
         model_version=model_version,
         games_assumed=games,
         season_started=stats.season_has_games(season),
+        page=page,
+        per_page=per_page,
+        total=total,
         rankings=[
             SeasonRankingRow(
                 rank=i,
@@ -121,8 +134,62 @@ def season_rankings(
                 is_rookie=bool(ctx.is_rookie) if ctx else False,
                 basis=_basis(ctx),
             )
-            for i, (pred, player, ctx) in enumerate(rows, start=1)
+            for i, (pred, player, ctx) in enumerate(rows, start=offset + 1)
         ],
     )
     cache_set(key, out.model_dump(), ttl=settings.rankings_cache_ttl)
     return out
+
+
+@router.get(
+    "/last-season",
+    response_model=SeasonLeadersOut,
+    summary="What players actually did in a completed season",
+)
+def last_season_leaders(
+    db: DbSession,
+    season: int | None = Query(None, description="Defaults to the latest completed season"),
+    position: str = Query("FLEX", min_length=2, max_length=4, description="WR/RB/TE/FLEX"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+) -> SeasonLeadersOut:
+    """Actual results, not projections - the other half of a draft decision.
+
+    Regular season only. Playoff weeks are in the data but fantasy leagues do not score
+    them, and including them rewarded players whose teams went deep rather than players
+    who were good.
+    """
+    repo = LeaderRepository(db)
+    if season is None:
+        season = repo.latest_completed_season() or 0
+
+    offset = (page - 1) * per_page
+    total = repo.count(season, position)
+    rows = repo.leaders(season, position, per_page, offset)
+
+    return SeasonLeadersOut(
+        season=season,
+        position=position.upper(),
+        scoring="PPR (1 point per reception)",
+        regular_season_only=True,
+        page=page,
+        per_page=per_page,
+        total=total,
+        leaders=[
+            SeasonLeaderRow(
+                rank=i,
+                player_id=r.player_id,
+                name=r.name,
+                team=r.team,
+                position=r.position,
+                games=int(r.games or 0),
+                total_points=round(float(r.total_points or 0), 1),
+                points_per_game=round(float(r.points_per_game or 0), 2),
+                targets=int(r.targets or 0),
+                receptions=int(r.receptions or 0),
+                yards=round(float(r.yards or 0), 1),
+                touchdowns=int(r.touchdowns or 0),
+            )
+            for i, r in enumerate(rows, start=offset + 1)
+        ],
+    )

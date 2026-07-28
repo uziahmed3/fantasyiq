@@ -5,18 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FantasyIQ — Draft Board</title>
 <!--
-  Zero-build dashboard: no React, no npm, served straight off disk by FastAPI.
+  Zero-build dashboard: no React, no npm, served off disk by FastAPI.
 
-  Two modes, and the API decides which one applies rather than the UI guessing from a
-  date. /api/v1/rankings/season reports `season_started`:
+  Two tabs, because a draft decision needs both halves:
 
-    false -> DRAFT BOARD. Season-long projections for the upcoming season, from the
-             preseason model. Ranked by projected points per game, with a season total.
-             This is the only useful view in the offseason, when no team has played.
+    PROJECTED  - how the model expects players to do in the upcoming season
+    LAST YEAR  - what they actually did, no model involved
 
-    true  -> WEEKLY. Once real games exist, rolling form is far more informative than a
-             preseason guess, so the week selector appears and the weekly endpoint takes
-             over.
+  Quarterbacks are absent everywhere on purpose. Fantasy points here are computed from
+  receiving and rushing only, so a QB total would omit passing entirely. They are still
+  ingested, because the model needs them to know whether a team's starter changed.
+
+  Scoring is PPR - one point per reception. Regular season only: the underlying data runs
+  through the playoffs, but fantasy leagues do not score those weeks.
 -->
 <style>
   :root{--bg:#0d1117;--panel:#161b22;--border:#262d36;--text:#e6edf3;--muted:#8b949e;
@@ -24,18 +25,22 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);
        font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 70px}
+  .wrap{max-width:1150px;margin:0 auto;padding:24px 20px 70px}
   h1{font-size:23px;margin:0;letter-spacing:-.02em;display:inline-block}
   .tag{color:var(--muted);font-size:13px;margin-left:10px}
   .sub{color:var(--muted);font-size:13px;margin:6px 0 18px}
-  .controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;align-items:center}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px}
+  .tabs button{background:none;border:none;border-bottom:2px solid transparent;
+      color:var(--muted);padding:9px 15px;font-size:14px;font-weight:600;cursor:pointer}
+  .tabs button.on{color:var(--text);border-bottom-color:var(--accent)}
+  .controls{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px;align-items:center}
   select,input,button{background:var(--panel);color:var(--text);border:1px solid var(--border);
        border-radius:6px;padding:7px 11px;font-size:13px;font-family:inherit}
-  button{cursor:pointer} button:hover{border-color:var(--accent)}
-  button.pos{min-width:52px;font-weight:600}
+  button{cursor:pointer} button:hover:not(:disabled){border-color:var(--accent)}
+  button.pos{min-width:56px;font-weight:600}
   button.pos.on{background:var(--accent);border-color:var(--accent);color:#06121f}
   button.primary{background:var(--accent);border-color:var(--accent);color:#06121f;font-weight:600}
-  button:disabled{opacity:.5;cursor:not-allowed}
+  button:disabled{opacity:.4;cursor:not-allowed}
   .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;
          padding:16px;margin-bottom:18px}
   .panel h2{font-size:12px;margin:0 0 4px;text-transform:uppercase;letter-spacing:.07em;
@@ -47,11 +52,13 @@
   td{padding:9px 10px;border-bottom:1px solid rgba(38,45,54,.6)}
   tr.clickable:hover{background:rgba(79,156,249,.08);cursor:pointer}
   tr.selected{background:rgba(79,156,249,.14)}
-  .rank{color:var(--muted);width:40px}
+  .rank{color:var(--muted);width:42px}
   .num{text-align:right;font-variant-numeric:tabular-nums}
   .pts{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:var(--good)}
   .total{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
   .why{color:var(--muted);font-size:12px}
+  .pager{display:flex;align-items:center;gap:10px;margin-top:14px;color:var(--muted);
+         font-size:12px}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
   @media(max-width:860px){.grid2{grid-template-columns:1fr}}
   .kv{display:flex;justify-content:space-between;padding:6px 0;
@@ -62,13 +69,10 @@
   .badge.rookie{background:rgba(163,113,247,.18);color:var(--rookie)}
   .badge.cache{background:rgba(63,185,80,.15);color:var(--good)}
   .badge.model{background:rgba(210,153,34,.15);color:var(--warn)}
-  .conf{display:inline-block;width:44px;height:5px;background:rgba(255,255,255,.10);
-        border-radius:3px;overflow:hidden;vertical-align:middle}
-  .conf i{display:block;height:100%;background:var(--accent)}
   .err{color:var(--bad);font-size:13px;margin:8px 0}
   .empty{color:var(--muted);font-size:13px;padding:8px 0;line-height:1.7}
   code{background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:12px}
-  .spark{display:flex;align-items:flex-end;gap:3px;height:54px;margin:12px 0 4px}
+  .spark{display:flex;align-items:flex-end;gap:3px;height:52px;margin:12px 0 4px}
   .spark div{flex:1;background:var(--accent);border-radius:2px 2px 0 0;min-height:2px;opacity:.85}
   .sparklabels{display:flex;gap:3px;color:var(--muted);font-size:10px}
   .sparklabels span{flex:1;text-align:center}
@@ -77,7 +81,7 @@
   .dot.ok{background:var(--good)} .dot.bad{background:var(--bad)}
   .caveat{background:rgba(210,153,34,.08);border:1px solid rgba(210,153,34,.25);
           border-radius:8px;padding:10px 13px;color:var(--muted);font-size:12px;
-          margin-bottom:18px;line-height:1.65}
+          margin-bottom:16px;line-height:1.65}
 </style>
 </head>
 <body>
@@ -87,13 +91,16 @@
     <p class="sub" id="status">connecting…</p>
   </header>
 
+  <div class="tabs">
+    <button data-tab="projected" class="on">Projected</button>
+    <button data-tab="last">Last Year</button>
+  </div>
+
   <div class="caveat" id="caveat" style="display:none"></div>
 
   <div class="controls">
     <span id="positions"></span>
-    <span id="week-controls" style="display:none">
-      <select id="week"></select>
-    </span>
+    <span id="week-controls" style="display:none"><select id="week"></select></span>
     <button id="refresh">Refresh</button>
     <span id="meta" class="tag"></span>
   </div>
@@ -104,12 +111,17 @@
     <h2 id="board-title">Projections</h2>
     <p class="note" id="board-note"></p>
     <div id="board"><p class="empty">loading…</p></div>
+    <div class="pager" id="pager" style="display:none">
+      <button id="prev">&larr; Prev</button>
+      <span id="page-info"></span>
+      <button id="next">Next &rarr;</button>
+    </div>
   </div>
 
   <div class="grid2">
     <div class="panel">
       <h2>Player detail</h2>
-      <div id="player"><p class="empty">Select a player from the board.</p></div>
+      <div id="player"><p class="empty">Select a player from the table.</p></div>
     </div>
     <div class="panel">
       <h2>Single-game projection</h2>
@@ -123,6 +135,7 @@
   </div>
 
   <footer>
+    PPR scoring (1 point per reception) · regular season only · quarterbacks excluded<br>
     API <a href="/docs" style="color:var(--accent)">/docs</a> ·
     metrics <a href="/metrics" style="color:var(--accent)">/metrics</a> ·
     readiness <a href="/ready" style="color:var(--accent)">/ready</a><br>
@@ -132,8 +145,17 @@
 
 <script>
 const API = "/api/v1";
-const POSITIONS = ["WR", "RB", "TE", "QB"];
-let state = { position: "WR", season: null, week: null, started: false, selected: null };
+const PER_PAGE = 20;
+const POSITIONS = ["FLEX", "WR", "RB", "TE"];
+
+const state = {
+  tab: "projected",
+  position: "FLEX",
+  page: 1,
+  season: null,
+  started: false,
+  selected: null,
+};
 
 const $ = id => document.getElementById(id);
 const showError = m => { $("error").innerHTML = m ? `<p class="err">${m}</p>` : ""; };
@@ -150,13 +172,17 @@ async function api(path, opts) {
   return res.json();
 }
 
-function confBar(c) {
-  if (c == null) return "—";
-  const pct = Math.round(c * 100);
-  return `<span class="conf" title="confidence ${c.toFixed(2)}"><i style="width:${pct}%"></i></span>`;
-}
+// ---- tabs and position buttons ---------------------------------------------
+document.querySelector(".tabs").onclick = e => {
+  const tab = e.target.dataset.tab;
+  if (!tab) return;
+  state.tab = tab;
+  state.page = 1;
+  document.querySelectorAll(".tabs button").forEach(b =>
+    b.classList.toggle("on", b.dataset.tab === tab));
+  load();
+};
 
-// ---- position buttons ------------------------------------------------------
 $("positions").innerHTML = POSITIONS
   .map(p => `<button class="pos${p === state.position ? " on" : ""}" data-pos="${p}">${p}</button>`)
   .join("");
@@ -164,10 +190,25 @@ $("positions").onclick = e => {
   const pos = e.target.dataset.pos;
   if (!pos) return;
   state.position = pos;
+  state.page = 1;
   document.querySelectorAll("#positions .pos").forEach(b =>
     b.classList.toggle("on", b.dataset.pos === pos));
   load();
 };
+
+function renderPager(page, perPage, total) {
+  if (!total) { $("pager").style.display = "none"; return; }
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const from = (page - 1) * perPage + 1;
+  const to = Math.min(page * perPage, total);
+  $("pager").style.display = "";
+  $("page-info").textContent = `${from}–${to} of ${total}  ·  page ${page} of ${pages}`;
+  $("prev").disabled = page <= 1;
+  $("next").disabled = page >= pages;
+}
+
+$("prev").onclick = () => { if (state.page > 1) { state.page--; load(); } };
+$("next").onclick = () => { state.page++; load(); };
 
 async function health() {
   try {
@@ -179,62 +220,99 @@ async function health() {
   } catch { $("status").textContent = "API unreachable"; }
 }
 
-// ---- the board -------------------------------------------------------------
+// ---- loading ---------------------------------------------------------------
 async function load() {
   $("board").innerHTML = `<p class="empty">loading…</p>`;
   showError("");
   try {
-    // Ask for the season board first: its response tells us whether the season has
-    // started, which decides the whole layout.
-    const d = await api(`/rankings/season?position=${state.position}&limit=150`);
+    if (state.tab === "last") return await renderLastYear();
+    const d = await api(
+      `/rankings/season?position=${state.position}&page=${state.page}&per_page=${PER_PAGE}`);
     state.season = d.season;
     state.started = d.season_started;
-
-    if (!d.season_started) return renderDraftBoard(d);
-    return renderWeekly(d.season);
+    return d.season_started ? renderWeekly(d.season) : renderProjected(d);
   } catch (e) {
     showError(e.message);
     $("board").innerHTML = "";
+    $("pager").style.display = "none";
   }
 }
 
-function renderDraftBoard(d) {
+function renderProjected(d) {
   $("title").textContent = `FantasyIQ ${d.season} Draft Board`;
-  $("mode-tag").textContent = "season-long projections";
+  $("mode-tag").textContent = "projected season";
   $("week-controls").style.display = "none";
-  $("board-title").textContent = `${d.position} — projected ${d.season} season`;
+  $("board-title").textContent = `${d.position} — projected ${d.season}`;
   $("board-note").textContent =
-    `Ranked by projected points per game. Season total assumes ${d.games_assumed} games.`;
+    `Ranked by projected points per game. Season total assumes ${d.games_assumed} games. PPR.`;
   $("meta").textContent = `model: ${d.model_version}`;
   $("caveat").style.display = "";
   $("caveat").innerHTML =
-    `<b>${d.season} has not started.</b> These come from the preseason model, which uses last ` +
-    `season's production, target share, snap share, depth-chart position, draft capital and ` +
-    `whether the team's quarterback changed. A rookie's number rests on draft position and ` +
-    `projected role only — the confidence bar reflects that. Season totals assume a healthy ` +
-    `${d.games_assumed}-game season, which is optimistic for any individual player.`;
+    `<b>${d.season} has not started.</b> The model weighs last season's production and ` +
+    `target share, snap share, depth-chart position, age, draft capital, and whether the ` +
+    `team's quarterback changed — so a young player moving into a bigger role can project ` +
+    `above what he produced last year. A rookie's number rests on draft position and ` +
+    `projected role only. Season totals assume a healthy ${d.games_assumed} games, which is ` +
+    `optimistic for any individual player.`;
 
   if (!d.rankings.length) {
     $("board").innerHTML =
-      `<p class="empty">No ${d.position} projections stored for ${d.season} yet.<br>
-       Generate them from the <code>pipeline</code> folder:
-       <code>python -m preseason --season ${d.season}</code></p>`;
+      `<p class="empty">No ${d.position} projections for ${d.season} yet.<br>
+       From the <code>pipeline</code> folder: <code>python -m preseason</code></p>`;
+    $("pager").style.display = "none";
     return;
   }
 
   $("board").innerHTML = `<table><thead><tr>
-      <th class="rank">#</th><th>Player</th><th>Team</th>
-      <th class="num">Pts/Game</th><th class="num">Season</th>
-      <th>Conf</th><th>Basis</th></tr></thead><tbody>` +
+      <th class="rank">#</th><th>Player</th><th>Pos</th><th>Team</th>
+      <th class="num">Pts/Gm</th><th class="num">Season</th>
+      <th>Why</th></tr></thead><tbody>` +
     d.rankings.map(r => `<tr class="clickable" data-id="${r.player_id}">
       <td class="rank">${r.rank}</td>
       <td>${r.name}${r.is_rookie ? ' <span class="badge rookie">R</span>' : ""}</td>
-      <td>${r.team || "—"}</td>
+      <td>${r.position}</td><td>${r.team || "—"}</td>
       <td class="pts">${r.projected_points_per_game.toFixed(1)}</td>
       <td class="total">${r.projected_season_points.toFixed(0)}</td>
-      <td>${confBar(r.confidence)}</td>
       <td class="why">${r.basis || ""}</td></tr>`).join("") +
     `</tbody></table>`;
+  renderPager(d.page, d.per_page, d.total);
+  wireRows();
+}
+
+async function renderLastYear() {
+  const d = await api(
+    `/rankings/last-season?position=${state.position}&page=${state.page}&per_page=${PER_PAGE}`);
+  state.season = d.season + 1;  // detail panel should show the season we just listed
+  $("title").textContent = `FantasyIQ — ${d.season} Results`;
+  $("mode-tag").textContent = "actual results";
+  $("week-controls").style.display = "none";
+  $("caveat").style.display = "none";
+  $("board-title").textContent = `${d.position} — ${d.season} actual`;
+  $("board-note").textContent =
+    `${d.scoring}${d.regular_season_only ? ", regular season only" : ""}. No model — this is what happened.`;
+  $("meta").textContent = "";
+
+  if (!d.leaders.length) {
+    $("board").innerHTML = `<p class="empty">No ${d.position} results for ${d.season}.</p>`;
+    $("pager").style.display = "none";
+    return;
+  }
+
+  $("board").innerHTML = `<table><thead><tr>
+      <th class="rank">#</th><th>Player</th><th>Pos</th><th>Team</th>
+      <th class="num">G</th><th class="num">Rec</th><th class="num">Tgt</th>
+      <th class="num">Yds</th><th class="num">TD</th>
+      <th class="num">Pts/Gm</th><th class="num">Total</th></tr></thead><tbody>` +
+    d.leaders.map(r => `<tr class="clickable" data-id="${r.player_id}">
+      <td class="rank">${r.rank}</td><td>${r.name}</td>
+      <td>${r.position}</td><td>${r.team || "—"}</td>
+      <td class="num">${r.games}</td><td class="num">${r.receptions}</td>
+      <td class="num">${r.targets}</td><td class="num">${r.yards.toFixed(0)}</td>
+      <td class="num">${r.touchdowns}</td>
+      <td class="pts">${r.points_per_game.toFixed(1)}</td>
+      <td class="total">${r.total_points.toFixed(0)}</td></tr>`).join("") +
+    `</tbody></table>`;
+  renderPager(d.page, d.per_page, d.total);
   wireRows();
 }
 
@@ -247,30 +325,33 @@ async function renderWeekly(season) {
   if (!$("week").options.length) {
     $("week").innerHTML = Array.from({ length: 18 }, (_, i) => i + 1)
       .map(w => `<option value="${w}">Week ${w}</option>`).join("");
-    $("week").onchange = () => renderWeekly(season);
+    $("week").onchange = () => { state.page = 1; renderWeekly(season); };
   }
   const week = Number($("week").value) || 1;
   $("board-title").textContent = `${state.position} — week ${week}`;
-  $("board-note").textContent = "Ranked by projected points for this week, from recent form.";
+  $("board-note").textContent = "Ranked by projected points this week, from recent form. PPR.";
 
   const d = await api(
     `/rankings?week=${week}&season=${season}&position=${state.position}&limit=100`);
   $("meta").textContent = `model: ${d.model_version}`;
+  const start = (state.page - 1) * PER_PAGE;
+  const slice = d.rankings.slice(start, start + PER_PAGE);
 
-  if (!d.rankings.length) {
+  if (!slice.length) {
     $("board").innerHTML =
-      `<p class="empty">No projections stored for ${state.position} week ${week}.<br>
+      `<p class="empty">No projections for ${state.position} week ${week}.<br>
        Run <code>python -m run_weekly</code> from the pipeline folder.</p>`;
+    $("pager").style.display = "none";
     return;
   }
   $("board").innerHTML = `<table><thead><tr>
       <th class="rank">#</th><th>Player</th><th>Team</th>
-      <th>Conf</th><th class="num">Projected</th></tr></thead><tbody>` +
-    d.rankings.map(r => `<tr class="clickable" data-id="${r.player_id}">
+      <th class="num">Projected</th></tr></thead><tbody>` +
+    slice.map(r => `<tr class="clickable" data-id="${r.player_id}">
       <td class="rank">${r.rank}</td><td>${r.name}</td><td>${r.team || "—"}</td>
-      <td>${confBar(r.confidence)}</td>
       <td class="pts">${r.projected_points.toFixed(1)}</td></tr>`).join("") +
     `</tbody></table>`;
+  renderPager(state.page, PER_PAGE, d.rankings.length);
   wireRows();
 }
 
@@ -287,25 +368,28 @@ async function selectPlayer(id, row) {
   $("project").disabled = false; $("again").disabled = false;
   $("player").innerHTML = `<p class="empty">loading…</p>`;
   try {
-    // Show last season's log when the new season has not started.
     const logSeason = state.started ? state.season : state.season - 1;
     const [p, stats] = await Promise.all([
-      api(`/players/${id}`), api(`/players/${id}/stats?season=${logSeason}&limit=20`)
+      api(`/players/${id}`), api(`/players/${id}/stats?season=${logSeason}&limit=25`)
     ]);
-    const asc = [...stats].sort((a, b) => a.week - b.week);
+    // Regular season only, to match every other number on the page.
+    const asc = [...stats].filter(s => s.week <= 18).sort((a, b) => a.week - b.week);
     const max = Math.max(1, ...asc.map(s => s.fantasy_points));
     const spark = asc.length ? `
       <div class="spark">${asc.map(s =>
         `<div style="height:${Math.max(2, (s.fantasy_points / max) * 100)}%"
               title="Week ${s.week}: ${s.fantasy_points.toFixed(1)}"></div>`).join("")}</div>
       <div class="sparklabels">${asc.map(s => `<span>${s.week}</span>`).join("")}</div>` : "";
+    const total = asc.reduce((a, s) => a + s.fantasy_points, 0);
 
     $("player").innerHTML =
       `<div class="kv"><span>Name</span><span>${p.name}</span></div>
        <div class="kv"><span>Team / Position</span><span>${p.team || "—"} · ${p.position}</span></div>
-       <div class="kv"><span>Age</span><span>${p.age ?? "—"}</span></div>
-       <p class="note" style="margin-top:10px">${logSeason} game log</p>` +
-      (asc.length ? spark : `<p class="empty">No ${logSeason} games — likely a rookie.</p>`);
+       <div class="kv"><span>Age</span><span>${p.age ?? "—"}</span></div>` +
+      (asc.length
+        ? `<div class="kv"><span>${logSeason} total</span><span>${total.toFixed(0)} pts in ${asc.length} games</span></div>
+           <p class="note" style="margin-top:10px">${logSeason} game log</p>${spark}`
+        : `<p class="empty">No ${logSeason} games — likely a rookie.</p>`);
   } catch (e) { showError(e.message); }
 }
 
@@ -326,7 +410,6 @@ async function project() {
     const ms = Math.round(performance.now() - t0);
     $("projection").innerHTML =
       `<div class="kv"><span>Projected</span><span class="pts">${body.prediction.toFixed(1)}</span></div>
-       <div class="kv"><span>Confidence</span><span>${body.confidence?.toFixed(2) ?? "—"}</span></div>
        <div class="kv"><span>Model</span><span><span class="badge">${body.model_version}</span></span></div>
        <div class="kv"><span>Mode</span><span>${body.mode}</span></div>
        ${body.basis ? `<div class="kv"><span>Based on</span><span class="why">${body.basis}</span></div>` : ""}

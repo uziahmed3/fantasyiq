@@ -84,4 +84,37 @@ class SeasonRankingsOut(BaseModel):
     # True once the season has started, at which point weekly projections are the
     # better view and the UI should switch.
     season_started: bool
+    # Paging: the board runs to hundreds of players, and 20 at a time is what a draft
+    # actually needs.
+    page: int
+    per_page: int
+    total: int
     rankings: list[SeasonRankingRow]
+
+
+class SeasonLeaderRow(BaseModel):
+    """What a player actually did in a completed season - no model involved."""
+
+    rank: int
+    player_id: int
+    name: str
+    team: str | None = None
+    position: str
+    games: int
+    total_points: float
+    points_per_game: float
+    targets: int
+    receptions: int
+    yards: float
+    touchdowns: int
+
+
+class SeasonLeadersOut(BaseModel):
+    season: int
+    position: str
+    scoring: str
+    regular_season_only: bool
+    page: int
+    per_page: int
+    total: int
+    leaders: list[SeasonLeaderRow]
