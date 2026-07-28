@@ -35,13 +35,15 @@ TARGET = "fantasy_points"
 # rank are the only real signal for a rookie; target share and snap share separate
 # "productive" from "happened to be on a pass-heavy team"; qb_changed captures the
 # biggest knowable swing factor for a receiver.
-PRESEASON_SCHEMA_VERSION = "ps1"
+PRESEASON_SCHEMA_VERSION = "ps2"
 
 PRESEASON_FEATURE_ORDER: tuple[str, ...] = (
     "prior_points_per_game",
     "prior_last4_points_per_game",
     "prior_targets_per_game",
     "prior_target_share",
+    "prior_carries_per_game",
+    "prior_carry_share",
     "prior_yards_per_game",
     "prior_games",
     "prior_snap_share",
@@ -62,6 +64,8 @@ PRESEASON_DEFAULTS: dict[str, float] = {
     "prior_last4_points_per_game": 0.0,
     "prior_targets_per_game": 0.0,
     "prior_target_share": 0.0,
+    "prior_carries_per_game": 0.0,
+    "prior_carry_share": 0.0,
     "prior_yards_per_game": 0.0,
     "prior_games": 0.0,
     "prior_snap_share": 0.0,

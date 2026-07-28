@@ -227,3 +227,84 @@ def test_season_board_is_empty_not_broken_without_projections(client, seed):
     body = client.get("/api/v1/rankings/season?season=2030&position=WR").json()
     assert body["rankings"] == []
     assert body["season_started"] is False
+
+
+# ---------------------------------------------------------------- draft value
+def test_replacement_level_is_the_nth_best_at_the_position():
+    from app.services.draft_value import STARTERS_BY_POSITION, replacement_levels
+
+    n = STARTERS_BY_POSITION["TE"]
+    pool = {"TE": [20.0 - i for i in range(n + 5)]}
+    assert replacement_levels(pool)["TE"] == pytest.approx(20.0 - (n - 1))
+
+
+def test_replacement_level_falls_back_on_a_shallow_pool():
+    from app.services.draft_value import replacement_levels
+
+    # Fewer players than the nominal starter count - use the worst rather than nothing.
+    assert replacement_levels({"TE": [12.0, 9.0, 4.0]})["TE"] == 4.0
+
+
+def test_value_is_none_when_the_position_has_no_baseline():
+    """None and 0.0 mean different things: 'unknown' versus 'exactly replacement'."""
+    from app.services.draft_value import value_over_replacement
+
+    assert value_over_replacement(15.0, "QB", {"WR": 9.0}) is None
+    assert value_over_replacement(9.0, "WR", {"WR": 9.0}) == 0.0
+
+
+def test_shallow_position_beats_a_higher_raw_projection():
+    """The whole point. A TE with a lower projection can be the better pick, because the
+    TE pool falls off faster - a raw-points list hides that and under-drafts elite TEs."""
+    from app.services.draft_value import replacement_levels, value_over_replacement
+
+    pools = {
+        # Deep WR pool: replacement is high.
+        "WR": [16.0] + [12.0] * 40,
+        # Shallow TE pool: replacement is low.
+        "TE": [15.0] + [6.0] * 20,
+    }
+    levels = replacement_levels(pools)
+    wr = value_over_replacement(16.0, "WR", levels)
+    te = value_over_replacement(15.0, "TE", levels)
+    assert te > wr, f"TE {te} should outrank WR {wr} despite the lower projection"
+
+
+def test_value_sort_and_points_sort_give_different_orders(client, db_session, seed):
+    from app.models import Prediction
+
+    # A TE just below a WR on raw points, in a pool shallow enough to matter.
+    db_session.add_all(
+        [
+            Prediction(
+                player_id=15,
+                season=2026,
+                week=0,
+                opponent="MIN",
+                prediction=16.0,
+                confidence=0.6,
+                model_version="preseason_v1",
+            ),
+            Prediction(
+                player_id=16,
+                season=2026,
+                week=0,
+                opponent="CIN",
+                prediction=15.9,
+                confidence=0.6,
+                model_version="preseason_v1",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    by_value = client.get("/api/v1/rankings/season?season=2026&position=FLEX&sort=value").json()
+    by_points = client.get("/api/v1/rankings/season?season=2026&position=FLEX&sort=points").json()
+    assert by_value["replacement_note"]
+    # Both must return the same players, and every row must carry a value.
+    assert {r["player_id"] for r in by_value["rankings"]} == {
+        r["player_id"] for r in by_points["rankings"]
+    }
+    for r in by_value["rankings"]:
+        assert r["value_over_replacement"] is not None
+        assert r["position_rank"] >= 1

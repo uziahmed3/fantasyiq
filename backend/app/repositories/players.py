@@ -330,6 +330,28 @@ class PredictionRepository:
         )
         return list(self.db.execute(stmt).all())
 
+    def position_projections(self, season: int, model_version: str) -> dict[str, list[float]]:
+        """Every projection for the season, grouped by position.
+
+        Needed to work out replacement level, which is a property of the position pool -
+        it cannot be computed from one page of results.
+        """
+        rows = self.db.execute(
+            select(Player.position, Prediction.prediction)
+            .join(Player, Player.id == Prediction.player_id)
+            .where(
+                Prediction.season == season,
+                Prediction.week == SEASON_PROJECTION_WEEK,
+                Prediction.model_version == model_version,
+                Player.position.in_(FLEX_POSITIONS),
+            )
+            .order_by(Prediction.prediction.desc())
+        ).all()
+        grouped: dict[str, list[float]] = {}
+        for position, value in rows:
+            grouped.setdefault(position, []).append(float(value))
+        return grouped
+
     def history(self, player_id: int, limit: int = 20) -> list[Prediction]:
         return list(
             self.db.scalars(

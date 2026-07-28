@@ -72,6 +72,11 @@ class SeasonRankingRow(BaseModel):
     is_rookie: bool = False
     # Why this number exists at all - prior production, or only draft capital.
     basis: str | None = None
+    # Points per game above a replacement-level starter at the SAME position. This is the
+    # number that answers "who should I take next", because raw points are not comparable
+    # across positions - see the replacement_level note on the response.
+    value_over_replacement: float | None = None
+    position_rank: int | None = None
 
 
 class SeasonRankingsOut(BaseModel):
@@ -84,6 +89,9 @@ class SeasonRankingsOut(BaseModel):
     # True once the season has started, at which point weekly projections are the
     # better view and the UI should switch.
     season_started: bool
+    # The per-position baseline each player is measured against, and how it was chosen.
+    replacement_level: dict[str, float] = {}
+    replacement_note: str = ""
     # Paging: the board runs to hundreds of players, and 20 at a time is what a draft
     # actually needs.
     page: int

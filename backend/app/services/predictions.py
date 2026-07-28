@@ -93,6 +93,8 @@ class PredictionService:
             prior_last4_points_per_game=ctx.prior_last4_points_per_game,
             prior_targets_per_game=ctx.prior_targets_per_game,
             prior_target_share=ctx.prior_target_share,
+            prior_carries_per_game=ctx.prior_carries_per_game,
+            prior_carry_share=ctx.prior_carry_share,
             prior_yards_per_game=ctx.prior_yards_per_game,
             prior_games=ctx.prior_games,
             prior_snap_share=ctx.prior_snap_share,

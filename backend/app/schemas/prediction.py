@@ -54,6 +54,8 @@ class PreseasonFeatureVector(BaseModel):
     prior_last4_points_per_game: float | None = None
     prior_targets_per_game: float | None = None
     prior_target_share: float | None = None
+    prior_carries_per_game: float | None = None
+    prior_carry_share: float | None = None
     prior_yards_per_game: float | None = None
     prior_games: int | None = None
     prior_snap_share: float | None = None

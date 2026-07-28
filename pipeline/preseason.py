@@ -53,6 +53,8 @@ PRESEASON_FEATURES = (
     "prior_last4_points_per_game",
     "prior_targets_per_game",
     "prior_target_share",
+    "prior_carries_per_game",
+    "prior_carry_share",
     "prior_yards_per_game",
     "prior_games",
     "prior_snap_share",
@@ -70,7 +72,8 @@ CONTEXT_SQL = text("""
 SELECT
     pc.player_id, p.name, p.position, pc.team,
     pc.prior_points_per_game, pc.prior_last4_points_per_game, pc.prior_targets_per_game,
-    pc.prior_target_share, pc.prior_yards_per_game, pc.prior_games, pc.prior_snap_share,
+    pc.prior_target_share, pc.prior_carries_per_game, pc.prior_carry_share,
+    pc.prior_yards_per_game, pc.prior_games, pc.prior_snap_share,
     pc.depth_chart_rank, pc.draft_round, pc.draft_pick, pc.years_experience,
     pc.is_rookie, pc.age, pc.team_pass_attempts_prior, pc.qb_changed
 FROM player_context pc

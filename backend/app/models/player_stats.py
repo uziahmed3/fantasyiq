@@ -19,6 +19,9 @@ class PlayerStats(Base, TimestampMixin):
     is_home: Mapped[bool] = mapped_column(default=True, nullable=False)
 
     targets: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # The volume stat a running back is judged on. Was available in the source data and
+    # unused, which left RBs with no usage signal at all.
+    carries: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     receptions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     yards: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     touchdowns: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

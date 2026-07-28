@@ -44,14 +44,16 @@ RETURNING id
 """)
 
 UPSERT_STATS = text("""
-INSERT INTO player_stats (player_id, season, week, opponent, is_home, targets, receptions,
-                          yards, touchdowns, fantasy_points, created_at, updated_at)
-VALUES (:player_id, :season, :week, :opponent, :is_home, :targets, :receptions,
+INSERT INTO player_stats (player_id, season, week, opponent, is_home, targets, carries,
+                          receptions, yards, touchdowns, fantasy_points,
+                          created_at, updated_at)
+VALUES (:player_id, :season, :week, :opponent, :is_home, :targets, :carries, :receptions,
         :yards, :touchdowns, :fantasy_points, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (player_id, season, week) DO UPDATE SET
     opponent       = EXCLUDED.opponent,
     is_home        = EXCLUDED.is_home,
     targets        = EXCLUDED.targets,
+    carries        = EXCLUDED.carries,
     receptions     = EXCLUDED.receptions,
     yards          = EXCLUDED.yards,
     touchdowns     = EXCLUDED.touchdowns,
@@ -118,6 +120,7 @@ def upsert_stats(engine: Engine, weekly: pd.DataFrame, id_map: dict[str, int]) -
             "opponent": r.opponent,
             "is_home": bool(r.is_home),
             "targets": int(r.targets),
+            "carries": int(getattr(r, "carries", 0) or 0),
             "receptions": int(r.receptions),
             "yards": float(r.yards),
             "touchdowns": int(r.touchdowns),

@@ -16,7 +16,7 @@ import pandas as pd
 from config import CLEAN_DIR, RAW_DIR, SCORING
 from logging_setup import log
 
-COUNT_COLS = ["targets", "receptions", "receiving_tds", "rushing_tds"]
+COUNT_COLS = ["targets", "carries", "receptions", "receiving_tds", "rushing_tds"]
 FLOAT_COLS = ["receiving_yards", "rushing_yards"]
 
 
@@ -36,8 +36,13 @@ def clean_weekly(weekly: pd.DataFrame) -> pd.DataFrame:
     df = df[df["position"].notna() & df["recent_team"].notna()]
 
     for col in COUNT_COLS:
-        if col in df.columns:
-            df[col] = df[col].fillna(0).clip(lower=0).round().astype(int)
+        # Create the column if the feed omits it. A missing counting stat means "none
+        # recorded", which is 0 - and defaulting keeps a schema change from crashing the
+        # whole run over one absent field.
+        if col not in df.columns:
+            log.warning("weekly_column_absent", column=col, defaulted_to=0)
+            df[col] = 0
+        df[col] = df[col].fillna(0).clip(lower=0).round().astype(int)
     for col in FLOAT_COLS:
         if col in df.columns:
             df[col] = df[col].fillna(0.0).astype(float)
@@ -69,6 +74,9 @@ def clean_weekly(weekly: pd.DataFrame) -> pd.DataFrame:
             "opponent",
             "is_home",
             "targets",
+            # Carries: the volume stat a running back is judged on. Present in the source
+            # all along and silently dropped here, which left RBs with no usage signal.
+            "carries",
             "receptions",
             "yards",
             "touchdowns",

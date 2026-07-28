@@ -12,6 +12,11 @@ from app.schemas.player import (
     SeasonRankingRow,
     SeasonRankingsOut,
 )
+from app.services.draft_value import (
+    replacement_levels,
+    replacement_note,
+    value_over_replacement,
+)
 
 router = APIRouter(prefix="/rankings", tags=["rankings"])
 
@@ -59,6 +64,15 @@ def rankings(
     return out
 
 
+def _position_rank(pools: dict[str, list[float]], position: str, projection: float) -> int:
+    """Where this projection sits within its own position pool."""
+    values = sorted(pools.get(position, []), reverse=True)
+    for i, value in enumerate(values, start=1):
+        if value <= projection:
+            return i
+    return len(values) + 1
+
+
 def _basis(ctx) -> str | None:
     """Plain-language note on what a season projection actually rests on."""
     if ctx is None:
@@ -86,6 +100,12 @@ def season_rankings(
     position: str = Query("FLEX", min_length=2, max_length=4, description="WR/RB/TE/FLEX"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
+    sort: str = Query(
+        "value",
+        pattern="^(value|points)$",
+        description="value = points above a replacement starter at the same position "
+        "(the right order for drafting); points = raw projected points per game",
+    ),
 ) -> SeasonRankingsOut:
     """Season-long projections, produced before the season starts.
 
@@ -104,13 +124,29 @@ def season_rankings(
         season = repo.next_unplayed_season()
 
     offset = (page - 1) * per_page
-    key = rankings_key(f"season:{position}:{season}:{page}", 0, per_page)
+    key = rankings_key(f"season:{position}:{season}:{page}:{sort}", 0, per_page)
     if (cached := cache_get(key)) is not None:
         return SeasonRankingsOut(**cached)
 
-    total = repo.season_board_count(season, model_version, position)
-    rows = repo.season_board(season, model_version, position, per_page, offset)
     games = settings.games_per_season
+    # Replacement level is a property of the whole position pool, so it is computed from
+    # every projection - not from the page being returned.
+    pools = repo.position_projections(season, model_version)
+    levels = replacement_levels(pools)
+
+    total = repo.season_board_count(season, model_version, position)
+
+    if sort == "value":
+        # Ranking by value needs the full set ordered before paging, because the order is
+        # not the stored order. The pool is a few hundred rows, so this is cheap.
+        everything = repo.season_board(season, model_version, position, limit=2000, offset=0)
+        everything.sort(
+            key=lambda r: value_over_replacement(r[0].prediction, r[1].position, levels) or -999,
+            reverse=True,
+        )
+        rows = everything[offset : offset + per_page]
+    else:
+        rows = repo.season_board(season, model_version, position, per_page, offset)
 
     out = SeasonRankingsOut(
         season=season,
@@ -118,6 +154,8 @@ def season_rankings(
         model_version=model_version,
         games_assumed=games,
         season_started=stats.season_has_games(season),
+        replacement_level=levels,
+        replacement_note=replacement_note(levels),
         page=page,
         per_page=per_page,
         total=total,
@@ -133,6 +171,10 @@ def season_rankings(
                 confidence=pred.confidence,
                 is_rookie=bool(ctx.is_rookie) if ctx else False,
                 basis=_basis(ctx),
+                value_over_replacement=value_over_replacement(
+                    pred.prediction, player.position, levels
+                ),
+                position_rank=_position_rank(pools, player.position, pred.prediction),
             )
             for i, (pred, player, ctx) in enumerate(rows, start=offset + 1)
         ],

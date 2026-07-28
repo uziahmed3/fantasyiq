@@ -45,6 +45,8 @@ SELECT
     pc.prior_last4_points_per_game,
     pc.prior_targets_per_game,
     pc.prior_target_share,
+    pc.prior_carries_per_game,
+    pc.prior_carry_share,
     pc.prior_yards_per_game,
     pc.prior_games,
     pc.prior_snap_share,

@@ -101,6 +101,12 @@
   <div class="controls">
     <span id="positions"></span>
     <span id="week-controls" style="display:none"><select id="week"></select></span>
+    <span id="sort-controls">
+      <select id="sort">
+        <option value="value">Sort: draft value</option>
+        <option value="points">Sort: raw points</option>
+      </select>
+    </span>
     <button id="refresh">Refresh</button>
     <span id="meta" class="tag"></span>
   </div>
@@ -151,6 +157,7 @@ const POSITIONS = ["FLEX", "WR", "RB", "TE"];
 const state = {
   tab: "projected",
   position: "FLEX",
+  sort: "value",   // value = points above a replacement starter; the draft order
   page: 1,
   season: null,
   started: false,
@@ -227,7 +234,8 @@ async function load() {
   try {
     if (state.tab === "last") return await renderLastYear();
     const d = await api(
-      `/rankings/season?position=${state.position}&page=${state.page}&per_page=${PER_PAGE}`);
+      `/rankings/season?position=${state.position}&page=${state.page}` +
+      `&per_page=${PER_PAGE}&sort=${state.sort}`);
     state.season = d.season;
     state.started = d.season_started;
     return d.season_started ? renderWeekly(d.season) : renderProjected(d);
@@ -242,9 +250,13 @@ function renderProjected(d) {
   $("title").textContent = `FantasyIQ ${d.season} Draft Board`;
   $("mode-tag").textContent = "projected season";
   $("week-controls").style.display = "none";
+  $("sort-controls").style.display = "";
   $("board-title").textContent = `${d.position} — projected ${d.season}`;
   $("board-note").textContent =
-    `Ranked by projected points per game. Season total assumes ${d.games_assumed} games. PPR.`;
+    (state.sort === "value"
+      ? "Ranked by draft value - points per game above a replacement starter at the same position. "
+      : "Ranked by raw projected points per game. ") +
+    `Season total assumes ${d.games_assumed} games. PPR. ` + (d.replacement_note || "");
   $("meta").textContent = `model: ${d.model_version}`;
   $("caveat").style.display = "";
   $("caveat").innerHTML =
@@ -264,15 +276,19 @@ function renderProjected(d) {
   }
 
   $("board").innerHTML = `<table><thead><tr>
-      <th class="rank">#</th><th>Player</th><th>Pos</th><th>Team</th>
+      <th class="rank">#</th><th>Player</th><th>Pos</th><th>Rk</th><th>Team</th>
       <th class="num">Pts/Gm</th><th class="num">Season</th>
+      <th class="num" title="Points per game above a replacement starter at the same position">Value</th>
       <th>Why</th></tr></thead><tbody>` +
     d.rankings.map(r => `<tr class="clickable" data-id="${r.player_id}">
       <td class="rank">${r.rank}</td>
       <td>${r.name}${r.is_rookie ? ' <span class="badge rookie">R</span>' : ""}</td>
-      <td>${r.position}</td><td>${r.team || "—"}</td>
-      <td class="pts">${r.projected_points_per_game.toFixed(1)}</td>
-      <td class="total">${r.projected_season_points.toFixed(0)}</td>
+      <td>${r.position}</td>
+      <td class="why">${r.position != null && r.position_rank != null ? r.position + r.position_rank : ""}</td>
+      <td>${r.team || "—"}</td>
+      <td class="num">${r.projected_points_per_game.toFixed(1)}</td>
+      <td class="num">${r.projected_season_points.toFixed(0)}</td>
+      <td class="pts">${r.value_over_replacement != null ? r.value_over_replacement.toFixed(1) : "—"}</td>
       <td class="why">${r.basis || ""}</td></tr>`).join("") +
     `</tbody></table>`;
   renderPager(d.page, d.per_page, d.total);
@@ -286,6 +302,7 @@ async function renderLastYear() {
   $("title").textContent = `FantasyIQ — ${d.season} Results`;
   $("mode-tag").textContent = "actual results";
   $("week-controls").style.display = "none";
+  $("sort-controls").style.display = "none";
   $("caveat").style.display = "none";
   $("board-title").textContent = `${d.position} — ${d.season} actual`;
   $("board-note").textContent =
@@ -321,6 +338,7 @@ async function renderWeekly(season) {
   $("title").textContent = `FantasyIQ ${season}`;
   $("mode-tag").textContent = "weekly projections";
   $("caveat").style.display = "none";
+  $("sort-controls").style.display = "none";
   $("week-controls").style.display = "";
   if (!$("week").options.length) {
     $("week").innerHTML = Array.from({ length: 18 }, (_, i) => i + 1)
@@ -422,6 +440,7 @@ async function project() {
   }
 }
 
+$("sort").onchange = () => { state.sort = $("sort").value; state.page = 1; load(); };
 $("refresh").onclick = load;
 $("project").onclick = project;
 $("again").onclick = project;

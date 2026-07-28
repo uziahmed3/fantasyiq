@@ -96,6 +96,7 @@ def _preseason_heuristic(x: np.ndarray) -> np.ndarray:
     is_rookie = x[:, idx["is_rookie"]]
     qb_changed = x[:, idx["qb_changed"]]
     snap = x[:, idx["prior_snap_share"]]
+    carry_share = x[:, idx["prior_carry_share"]]
 
     # Veterans: recency-weighted carry-forward, shrunk toward zero when the sample is
     # small (a 2-game season is weak evidence of a rate).
@@ -116,7 +117,10 @@ def _preseason_heuristic(x: np.ndarray) -> np.ndarray:
     # Role multipliers: starters see the volume, backups do not.
     depth_factor = np.where(depth <= 1, 1.15, np.where(depth <= 2, 1.0, 0.65))
     snap_factor = 1.0 + 0.25 * (np.clip(snap, 0, 1) - 0.5)
-    role_factor = depth_factor * snap_factor
+    # A lead back (high carry share) is a different projection from a rotational one.
+    # Neutral at 0 so this cannot penalise receivers, who legitimately have no carries.
+    carry_factor = 1.0 + 0.30 * np.clip(carry_share, 0, 1)
+    role_factor = depth_factor * snap_factor * carry_factor
 
     # Apply role only to the extent we lack production history. A veteran's prior points
     # per game ALREADY reflects that he was the WR1 on 85% of snaps - multiplying by a

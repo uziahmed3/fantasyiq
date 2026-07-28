@@ -114,6 +114,7 @@ def test_output_schema_is_stable():
         "opponent",
         "is_home",
         "targets",
+        "carries",
         "receptions",
         "yards",
         "touchdowns",
@@ -295,3 +296,21 @@ def test_build_all_includes_the_season_being_projected(tmp_path, monkeypatch):
     context.build_all(engine)
     # 2023 is the earliest (nothing before it); 2026 is the projection season.
     assert built == [2024, 2025, 2026]
+
+
+def test_clean_weekly_keeps_carries():
+    """Carries reached the raw parquet (30,667 in real 2021-2025 data) and were dropped
+    in the cleaner's explicit column list - so running backs were projected with no usage
+    signal while the data sat right there. Pinned so it cannot silently vanish again."""
+    raw = RAW.copy()
+    raw["carries"] = [12, 12, 9, 3]
+    out = clean_weekly(raw)
+    assert "carries" in out.columns
+    assert out[out["player_id"] == "00-2"].iloc[0]["carries"] == 9
+
+
+def test_clean_weekly_clamps_negative_carries():
+    raw = RAW.copy()
+    raw["carries"] = [-4, 0, None, 2]
+    out = clean_weekly(raw)
+    assert (out["carries"] >= 0).all()

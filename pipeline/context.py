@@ -52,14 +52,16 @@ UPSERT_CONTEXT = text("""
 INSERT INTO player_context (
     player_id, season, team,
     prior_games, prior_points_per_game, prior_targets_per_game, prior_yards_per_game,
-    prior_target_share, prior_last4_points_per_game, prior_snap_share,
+    prior_target_share, prior_carries_per_game, prior_carry_share,
+    prior_last4_points_per_game, prior_snap_share,
     depth_chart_rank, draft_round, draft_pick, rookie_season, years_experience,
     is_rookie, age, team_pass_attempts_prior, team_points_prior, qb_changed,
     created_at, updated_at
 ) VALUES (
     :player_id, :season, :team,
     :prior_games, :prior_points_per_game, :prior_targets_per_game, :prior_yards_per_game,
-    :prior_target_share, :prior_last4_points_per_game, :prior_snap_share,
+:prior_target_share, :prior_carries_per_game, :prior_carry_share,
+    :prior_last4_points_per_game, :prior_snap_share,
     :depth_chart_rank, :draft_round, :draft_pick, :rookie_season, :years_experience,
     :is_rookie, :age, :team_pass_attempts_prior, :team_points_prior, :qb_changed,
     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
@@ -71,6 +73,8 @@ ON CONFLICT (player_id, season) DO UPDATE SET
     prior_targets_per_game      = EXCLUDED.prior_targets_per_game,
     prior_yards_per_game        = EXCLUDED.prior_yards_per_game,
     prior_target_share          = EXCLUDED.prior_target_share,
+    prior_carries_per_game      = EXCLUDED.prior_carries_per_game,
+    prior_carry_share           = EXCLUDED.prior_carry_share,
     prior_last4_points_per_game = EXCLUDED.prior_last4_points_per_game,
     prior_snap_share            = COALESCE(EXCLUDED.prior_snap_share,
                                            player_context.prior_snap_share),
@@ -98,6 +102,7 @@ SELECT
     ps.week,
     ps.opponent,
     ps.targets,
+    ps.carries,
     ps.yards,
     ps.fantasy_points,
     p.team AS current_team
@@ -108,6 +113,7 @@ WHERE ps.season = :prior_season AND ps.week <= :max_week
 
 TEAM_SQL = text("""
 SELECT p.team AS team, SUM(ps.targets) AS team_targets,
+       SUM(ps.carries) AS team_carries,
        SUM(ps.fantasy_points) AS team_points
 FROM player_stats ps
 JOIN players p ON p.id = ps.player_id
@@ -131,8 +137,10 @@ def _prior_production(engine: Engine, prior_season: int) -> pd.DataFrame:
         prior_games=("fantasy_points", "size"),
         prior_points_per_game=("fantasy_points", "mean"),
         prior_targets_per_game=("targets", "mean"),
+        prior_carries_per_game=("carries", "mean"),
         prior_yards_per_game=("yards", "mean"),
         prior_targets_total=("targets", "sum"),
+        prior_carries_total=("carries", "sum"),
     ).reset_index()
 
     # Last 4 games: a player whose role changed late in the year is better described by
@@ -152,8 +160,21 @@ def _prior_production(engine: Engine, prior_season: int) -> pd.DataFrame:
     agg["prior_target_share"] = (
         (agg["prior_targets_total"] / agg["team_targets"].replace(0, np.nan)).fillna(0.0).clip(0, 1)
     )
+    # Carry share is to a running back what target share is to a receiver: it separates a
+    # lead back from someone on a team that simply runs a lot.
+    agg["prior_carry_share"] = (
+        (agg["prior_carries_total"] / agg["team_carries"].replace(0, np.nan)).fillna(0.0).clip(0, 1)
+    )
     agg["team_points_prior"] = agg["team_points"].fillna(0.0)
-    return agg.drop(columns=["prior_targets_total", "team_targets", "team_points"])
+    return agg.drop(
+        columns=[
+            "prior_targets_total",
+            "prior_carries_total",
+            "team_targets",
+            "team_carries",
+            "team_points",
+        ]
+    )
 
 
 # --------------------------------------------------------------------- team / QB context
@@ -529,6 +550,8 @@ def build(
         "prior_targets_per_game": 0.0,
         "prior_yards_per_game": 0.0,
         "prior_target_share": 0.0,
+        "prior_carries_per_game": 0.0,
+        "prior_carry_share": 0.0,
         "prior_last4_points_per_game": 0.0,
         "team_pass_attempts_prior": 0.0,
         "team_points_prior": 0.0,
@@ -568,6 +591,8 @@ def build(
             "prior_targets_per_game": float(r.prior_targets_per_game),
             "prior_yards_per_game": float(r.prior_yards_per_game),
             "prior_target_share": float(r.prior_target_share),
+            "prior_carries_per_game": float(r.prior_carries_per_game),
+            "prior_carry_share": float(r.prior_carry_share),
             "prior_last4_points_per_game": float(r.prior_last4_points_per_game),
             "prior_snap_share": _clean_float(getattr(r, "prior_snap_share", None)),
             "depth_chart_rank": _clean_int(getattr(r, "depth_chart_rank", None)),

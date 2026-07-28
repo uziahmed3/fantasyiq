@@ -29,6 +29,8 @@ class PlayerContext(Base, TimestampMixin):
     prior_targets_per_game: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     prior_yards_per_game: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     prior_target_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    prior_carries_per_game: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    prior_carry_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     prior_last4_points_per_game: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     # ---- playing time ----
