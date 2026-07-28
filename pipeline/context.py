@@ -468,9 +468,45 @@ def build(engine: Engine, season: int, use_optional_feeds: bool = True) -> int:
     return len(payload)
 
 
+def seasons_with_data(engine: Engine) -> list[int]:
+    with engine.connect() as conn:
+        return [
+            int(r[0])
+            for r in conn.execute(text("SELECT DISTINCT season FROM player_stats ORDER BY season"))
+        ]
+
+
+def build_all(engine: Engine, use_optional_feeds: bool = True) -> dict[int, int]:
+    """Build context for every season that has a prior season to draw on.
+
+    The preseason model trains on (season S-1 -> season S) pairs, so it needs context for
+    as many seasons as possible - not just the one being projected. The earliest ingested
+    season is skipped because there is nothing before it.
+    """
+    seasons = seasons_with_data(engine)
+    if len(seasons) < 2:
+        log.warning(
+            "context_needs_two_seasons",
+            seasons=seasons,
+            hint="ingest at least two consecutive seasons",
+        )
+        return {}
+    built = {}
+    for season in seasons[1:]:
+        built[season] = build(engine, season, use_optional_feeds=use_optional_feeds)
+    return built
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build preseason context for a season")
-    parser.add_argument("--season", type=int, required=True, help="Season being projected")
+    parser = argparse.ArgumentParser(description="Build preseason context")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--season", type=int, help="Single season being projected")
+    group.add_argument(
+        "--all",
+        action="store_true",
+        help="Build for every season that has a prior season - what the preseason model "
+        "needs in order to have more than one training pair",
+    )
     parser.add_argument(
         "--no-optional-feeds",
         action="store_true",
@@ -479,7 +515,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     engine = load.get_engine()
-    rows = build(engine, args.season, use_optional_feeds=not args.no_optional_feeds)
+    feeds = not args.no_optional_feeds
+
+    if args.all:
+        built = build_all(engine, use_optional_feeds=feeds)
+        if not built:
+            print(
+                "\nNothing to build. Context needs at least two seasons of stats "
+                "(season S uses season S-1).\n"
+            )
+            return 1
+        for season, rows in sorted(built.items()):
+            print(f"  {season}: context for {rows} players")
+        print()
+        return 0
+
+    rows = build(engine, args.season, use_optional_feeds=feeds)
     print(f"\nBuilt context for {rows} players for the {args.season} season.\n")
     return 0 if rows else 1
 

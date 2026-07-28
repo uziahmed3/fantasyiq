@@ -386,7 +386,10 @@ def main(argv: list[str] | None = None) -> int:
         f"across synthetic seasons {seasons}."
     )
     print(f"Rookies per season: {rookies}")
-    print("These are NOT real NFL numbers. For real data:  python -m run_weekly\n")
+    print(
+        "These are NOT real NFL numbers. For real data, from the repository root:\n"
+        "  python local.py --seasons 2021,2022,2023,2024,2025\n"
+    )
     return 0
 
 

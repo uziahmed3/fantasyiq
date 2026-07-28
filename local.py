@@ -300,6 +300,27 @@ def load_real(env: dict[str, str], source: str) -> None:
     ok("Data loaded.")
 
 
+def build_context(env: dict[str, str], demo: bool) -> None:
+    """Assemble preseason context for every season we have.
+
+    Must run BEFORE training: the preseason model trains on context rows, and an earlier
+    version of this script trained first and then built context inside the projection
+    step - so the preseason model always reported "no training rows" on a fresh run.
+
+    In demo mode the optional feeds are skipped. Synthetic players have made-up ids that
+    cannot match real snap-count or depth-chart records, so downloading them costs time
+    and matches nothing.
+    """
+    step("Building preseason context (prior season, role, draft capital)")
+    cmd = [VENV_PY, "-m", "context", "--all"]
+    if demo:
+        cmd.append("--no-optional-feeds")
+    if run(cmd, ROOT / "pipeline", env, "Context build", fatal=False) != 0:
+        warn(
+            "Context build failed - week-1 and rookie projections will be unavailable."
+        )
+
+
 def train(env: dict[str, str]) -> None:
     step("Training models on the loaded data")
     ml = ROOT / "ml-service"
@@ -531,6 +552,7 @@ def main(argv: list[str] | None = None) -> int:
             load_demo(env)
         else:
             load_real(env, "manual" if args.offline else "auto")
+        build_context(env, demo=args.demo)
         if not args.skip_train:
             train(env)
         generate_projections(env, args.ml_port)
