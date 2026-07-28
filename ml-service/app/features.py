@@ -35,7 +35,7 @@ TARGET = "fantasy_points"
 # rank are the only real signal for a rookie; target share and snap share separate
 # "productive" from "happened to be on a pass-heavy team"; qb_changed captures the
 # biggest knowable swing factor for a receiver.
-PRESEASON_SCHEMA_VERSION = "ps2"
+PRESEASON_SCHEMA_VERSION = "ps3"
 
 PRESEASON_FEATURE_ORDER: tuple[str, ...] = (
     "prior_points_per_game",
@@ -55,6 +55,29 @@ PRESEASON_FEATURE_ORDER: tuple[str, ...] = (
     "age",
     "team_pass_attempts_prior",
     "qb_changed",
+    # ---- multi-season history ----
+    # One prior season let a single down year erase a career: Jefferson went 19.5, 21.5,
+    # 20.4, 18.6, 11.9 and projected 11.91. These carry the whole record, weighted by
+    # recency, games played and the age curve.
+    "career_weighted_ppg",
+    "career_weighted_targets_per_game",
+    "career_weighted_carries_per_game",
+    "career_weighted_target_share",
+    "career_best_ppg",
+    "career_seasons",
+    "career_games",
+    # ---- volume vs efficiency ----
+    # Volume is stable year to year (~0.83 correlation); efficiency is not. A large
+    # negative efficiency_delta means the role held and only the finishing broke.
+    "prior_points_per_target",
+    "career_points_per_target",
+    "efficiency_delta",
+    # ---- situation ----
+    "qb_quality",
+    "team_departed_target_share",
+    "team_departed_carry_share",
+    "teammate_top_target_share",
+    "teammate_top_carry_share",
 )
 
 # Sentinels for genuinely-unknown values. Undrafted is not round 0 - it is worse than
@@ -77,6 +100,21 @@ PRESEASON_DEFAULTS: dict[str, float] = {
     "age": 25.0,
     "team_pass_attempts_prior": 0.0,
     "qb_changed": 0.0,
+    "career_weighted_ppg": 0.0,
+    "career_weighted_targets_per_game": 0.0,
+    "career_weighted_carries_per_game": 0.0,
+    "career_weighted_target_share": 0.0,
+    "career_best_ppg": 0.0,
+    "career_seasons": 0.0,
+    "career_games": 0.0,
+    "prior_points_per_target": 0.0,
+    "career_points_per_target": 0.0,
+    "efficiency_delta": 0.0,
+    "qb_quality": 0.0,
+    "team_departed_target_share": 0.0,
+    "team_departed_carry_share": 0.0,
+    "teammate_top_target_share": 0.0,
+    "teammate_top_carry_share": 0.0,
 }
 
 

@@ -66,6 +66,21 @@ PRESEASON_FEATURES = (
     "age",
     "team_pass_attempts_prior",
     "qb_changed",
+    "career_weighted_ppg",
+    "career_weighted_targets_per_game",
+    "career_weighted_carries_per_game",
+    "career_weighted_target_share",
+    "career_best_ppg",
+    "career_seasons",
+    "career_games",
+    "prior_points_per_target",
+    "career_points_per_target",
+    "efficiency_delta",
+    "qb_quality",
+    "team_departed_target_share",
+    "team_departed_carry_share",
+    "teammate_top_target_share",
+    "teammate_top_carry_share",
 )
 
 CONTEXT_SQL = text("""
@@ -75,7 +90,22 @@ SELECT
     pc.prior_target_share, pc.prior_carries_per_game, pc.prior_carry_share,
     pc.prior_yards_per_game, pc.prior_games, pc.prior_snap_share,
     pc.depth_chart_rank, pc.draft_round, pc.draft_pick, pc.years_experience,
-    pc.is_rookie, pc.age, pc.team_pass_attempts_prior, pc.qb_changed
+    pc.is_rookie, pc.age, pc.team_pass_attempts_prior, pc.qb_changed,
+    pc.career_weighted_ppg,
+    pc.career_weighted_targets_per_game,
+    pc.career_weighted_carries_per_game,
+    pc.career_weighted_target_share,
+    pc.career_best_ppg,
+    pc.career_seasons,
+    pc.career_games,
+    pc.prior_points_per_target,
+    pc.career_points_per_target,
+    pc.efficiency_delta,
+    pc.qb_quality,
+    pc.team_departed_target_share,
+    pc.team_departed_carry_share,
+    pc.teammate_top_target_share,
+    pc.teammate_top_carry_share
 FROM player_context pc
 JOIN players p ON p.id = pc.player_id
 WHERE pc.season = :season

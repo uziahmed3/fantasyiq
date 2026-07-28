@@ -314,3 +314,45 @@ def test_clean_weekly_clamps_negative_carries():
     raw["carries"] = [-4, 0, None, 2]
     out = clean_weekly(raw)
     assert (out["carries"] >= 0).all()
+
+
+# ---------------------------------------------------------------- career history
+def test_age_multiplier_peaks_in_the_mid_twenties():
+    from career import PEAK_AGE, age_multiplier
+
+    assert age_multiplier(PEAK_AGE) > age_multiplier(22)
+    assert age_multiplier(PEAK_AGE) > age_multiplier(32)
+    assert age_multiplier(None) == 1.0  # unknown age must not distort anything
+
+
+def test_season_weight_discounts_an_injury_shortened_season():
+    """A 9-game season is a noisier estimate of a per-game rate than a 17-game one, so it
+    carries less weight. This is the injury adjustment."""
+    from career import _season_weight
+
+    full = _season_weight(0, 17)
+    half = _season_weight(0, 9)
+    assert half < full
+    assert half == pytest.approx(full * 9 / 17, rel=1e-6)
+
+
+def test_recency_beats_distant_history_but_does_not_erase_it():
+    from career import _season_weight
+
+    last = _season_weight(0, 17)
+    two_back = _season_weight(2, 17)
+    five_back = _season_weight(5, 17)
+    assert last > two_back > five_back > 0, "old seasons must still count for something"
+
+
+def test_career_weighting_rescues_a_single_down_year():
+    """The Jefferson case. Four strong seasons then one bad one must not project as the
+    bad one - which is exactly what a single-prior-season model did (11.9 -> 11.91)."""
+    from career import _season_weight
+
+    seasons = [(0, 17, 11.9), (1, 17, 18.6), (2, 10, 20.4), (3, 17, 21.5), (4, 17, 19.5)]
+    num = sum(_season_weight(ago, g) * ppg for ago, g, ppg in seasons)
+    den = sum(_season_weight(ago, g) for ago, g, _ in seasons)
+    weighted = num / den
+    assert weighted > 15.0, f"career weighting produced {weighted:.1f}, too close to the down year"
+    assert weighted < 18.6, "must still weight the most recent season most heavily"

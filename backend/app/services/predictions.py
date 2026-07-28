@@ -106,6 +106,21 @@ class PredictionService:
             age=ctx.age,
             team_pass_attempts_prior=ctx.team_pass_attempts_prior,
             qb_changed=int(bool(ctx.qb_changed)),
+            career_weighted_ppg=ctx.career_weighted_ppg,
+            career_weighted_targets_per_game=ctx.career_weighted_targets_per_game,
+            career_weighted_carries_per_game=ctx.career_weighted_carries_per_game,
+            career_weighted_target_share=ctx.career_weighted_target_share,
+            career_best_ppg=ctx.career_best_ppg,
+            career_seasons=ctx.career_seasons,
+            career_games=ctx.career_games,
+            prior_points_per_target=ctx.prior_points_per_target,
+            career_points_per_target=ctx.career_points_per_target,
+            efficiency_delta=ctx.efficiency_delta,
+            qb_quality=ctx.qb_quality,
+            team_departed_target_share=ctx.team_departed_target_share,
+            team_departed_carry_share=ctx.team_departed_carry_share,
+            teammate_top_target_share=ctx.teammate_top_target_share,
+            teammate_top_carry_share=ctx.teammate_top_carry_share,
         )
 
     def choose_mode(self, req: PredictionRequest) -> str:

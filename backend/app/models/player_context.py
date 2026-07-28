@@ -52,6 +52,27 @@ class PlayerContext(Base, TimestampMixin):
     team_points_prior: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     qb_changed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # ---- multi-season history, volume/efficiency split, situation (migration 0005) ----
+    career_weighted_ppg: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    career_weighted_targets_per_game: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False
+    )
+    career_weighted_carries_per_game: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False
+    )
+    career_weighted_target_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    career_best_ppg: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    career_seasons: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    career_games: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    prior_points_per_target: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    career_points_per_target: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    efficiency_delta: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    qb_quality: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    team_departed_target_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    team_departed_carry_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    teammate_top_target_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    teammate_top_carry_share: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
     player: Mapped["Player"] = relationship(back_populates="contexts")  # noqa: F821
 
     __table_args__ = (

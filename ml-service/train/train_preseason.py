@@ -7,9 +7,14 @@ contract and its own artifact:
     preseason  : "given last season, his role, and his draft capital, what does he
                   average early this season?"
 
-Target is mean points per game over weeks 1-4 of the projected season. Weeks 1-4 rather
-than the full season because that is the window where no in-season form exists yet - past
-about week 4 the in-season model has enough history and takes over.
+Target is mean points per game over the whole REGULAR season.
+
+It was weeks 1-4 originally, on the reasoning that this model only has to cover the gap
+before in-season form exists. That was wrong for the way the output is actually used: this
+is a draft board, and a drafter is buying a whole season, not September. Predicting a
+four-week window also made the numbers noisier and compressed the spread - Ja'Marr Chase,
+who has the strongest multi-year record in the top tier, was landing below players with
+weaker histories because his early-season weeks happened to be softer.
 
 Training rows are (player, season) pairs: context assembled from season S-1 paired with
 what actually happened in weeks 1-4 of season S. That means N seasons of ingested data
@@ -34,7 +39,12 @@ from train.common import metrics, write_metadata
 from train.dataset import ARTIFACT_DIR, _database_url
 
 VERSION = "preseason_v1"
-EARLY_WEEKS = 4
+# The full regular season. Playoff weeks are excluded because fantasy leagues do not
+# score them.
+TARGET_WEEKS = 18
+# A season needs this many games before its average is a fair target; below it, one big
+# or empty game dominates.
+MIN_TARGET_GAMES = 6
 
 DATASET_SQL = text("""
 SELECT
@@ -58,6 +68,21 @@ SELECT
     pc.age,
     pc.team_pass_attempts_prior,
     pc.qb_changed,
+    pc.career_weighted_ppg,
+    pc.career_weighted_targets_per_game,
+    pc.career_weighted_carries_per_game,
+    pc.career_weighted_target_share,
+    pc.career_best_ppg,
+    pc.career_seasons,
+    pc.career_games,
+    pc.prior_points_per_target,
+    pc.career_points_per_target,
+    pc.efficiency_delta,
+    pc.qb_quality,
+    pc.team_departed_target_share,
+    pc.team_departed_carry_share,
+    pc.teammate_top_target_share,
+    pc.teammate_top_carry_share,
     early.actual_ppg,
     early.games_played
 FROM player_context pc
@@ -67,8 +92,9 @@ JOIN (
            AVG(fantasy_points) AS actual_ppg,
            COUNT(*)            AS games_played
     FROM player_stats
-    WHERE week <= :early_weeks
+    WHERE week <= :target_weeks
     GROUP BY player_id, season
+    HAVING COUNT(*) >= :min_games
 ) early
   ON early.player_id = pc.player_id AND early.season = pc.season
 ORDER BY pc.season, pc.player_id
@@ -78,7 +104,11 @@ ORDER BY pc.season, pc.player_id
 def load_dataset() -> pd.DataFrame:
     engine = create_engine(_database_url(), pool_pre_ping=True)
     with engine.connect() as conn:
-        df = pd.read_sql(DATASET_SQL, conn, params={"early_weeks": EARLY_WEEKS})
+        df = pd.read_sql(
+            DATASET_SQL,
+            conn,
+            params={"target_weeks": TARGET_WEEKS, "min_games": MIN_TARGET_GAMES},
+        )
     engine.dispose()
     return df
 
@@ -192,7 +222,7 @@ def main() -> int:
             "kind": "preseason",
             "feature_order": list(PRESEASON_FEATURE_ORDER),
             "feature_schema_version": PRESEASON_SCHEMA_VERSION,
-            "target": f"mean fantasy points, weeks 1-{EARLY_WEEKS}",
+            "target": f"mean fantasy points per game, regular season (weeks 1-{TARGET_WEEKS})",
             "train_seasons": [int(s) for s in seasons[:-1]],
             "holdout_season": holdout,
             "naive_carry_forward_rmse": base["rmse"],
@@ -205,7 +235,9 @@ def main() -> int:
     print(f"\n=== {VERSION} ===")
     print(f"train seasons      : {seasons[:-1]}")
     print(f"holdout season     : {holdout}   ({len(x_va)} players)")
-    print(f"target             : mean points/game, weeks 1-{EARLY_WEEKS}")
+    print(
+        f"target             : points/game, full regular season " f"(min {MIN_TARGET_GAMES} games)"
+    )
     for k, v in scores.items():
         print(f"{k:19}: {v}")
     print(f"{'naive carry-forward':19}: rmse {base['rmse']}")

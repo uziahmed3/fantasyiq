@@ -33,6 +33,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+import career as career_mod
 import ingest
 import load
 from logging_setup import log
@@ -56,6 +57,11 @@ INSERT INTO player_context (
     prior_last4_points_per_game, prior_snap_share,
     depth_chart_rank, draft_round, draft_pick, rookie_season, years_experience,
     is_rookie, age, team_pass_attempts_prior, team_points_prior, qb_changed,
+    career_weighted_ppg, career_weighted_targets_per_game, career_weighted_carries_per_game,
+    career_weighted_target_share, career_best_ppg, career_seasons, career_games,
+    prior_points_per_target, career_points_per_target, efficiency_delta,
+    qb_quality, team_departed_target_share, team_departed_carry_share,
+    teammate_top_target_share, teammate_top_carry_share,
     created_at, updated_at
 ) VALUES (
     :player_id, :season, :team,
@@ -63,7 +69,12 @@ INSERT INTO player_context (
 :prior_target_share, :prior_carries_per_game, :prior_carry_share,
     :prior_last4_points_per_game, :prior_snap_share,
     :depth_chart_rank, :draft_round, :draft_pick, :rookie_season, :years_experience,
-    :is_rookie, :age, :team_pass_attempts_prior, :team_points_prior, :qb_changed,
+:is_rookie, :age, :team_pass_attempts_prior, :team_points_prior, :qb_changed,
+    :career_weighted_ppg, :career_weighted_targets_per_game, :career_weighted_carries_per_game,
+    :career_weighted_target_share, :career_best_ppg, :career_seasons, :career_games,
+    :prior_points_per_target, :career_points_per_target, :efficiency_delta,
+    :qb_quality, :team_departed_target_share, :team_departed_carry_share,
+    :teammate_top_target_share, :teammate_top_carry_share,
     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 )
 ON CONFLICT (player_id, season) DO UPDATE SET
@@ -89,6 +100,21 @@ ON CONFLICT (player_id, season) DO UPDATE SET
     team_pass_attempts_prior    = EXCLUDED.team_pass_attempts_prior,
     team_points_prior           = EXCLUDED.team_points_prior,
     qb_changed                  = EXCLUDED.qb_changed,
+    career_weighted_ppg              = EXCLUDED.career_weighted_ppg,
+    career_weighted_targets_per_game = EXCLUDED.career_weighted_targets_per_game,
+    career_weighted_carries_per_game = EXCLUDED.career_weighted_carries_per_game,
+    career_weighted_target_share     = EXCLUDED.career_weighted_target_share,
+    career_best_ppg                  = EXCLUDED.career_best_ppg,
+    career_seasons                   = EXCLUDED.career_seasons,
+    career_games                     = EXCLUDED.career_games,
+    prior_points_per_target          = EXCLUDED.prior_points_per_target,
+    career_points_per_target         = EXCLUDED.career_points_per_target,
+    efficiency_delta                 = EXCLUDED.efficiency_delta,
+    qb_quality                       = EXCLUDED.qb_quality,
+    team_departed_target_share       = EXCLUDED.team_departed_target_share,
+    team_departed_carry_share        = EXCLUDED.team_departed_carry_share,
+    teammate_top_target_share        = EXCLUDED.teammate_top_target_share,
+    teammate_top_carry_share         = EXCLUDED.teammate_top_carry_share,
     updated_at                  = CURRENT_TIMESTAMP
 """)
 
@@ -496,6 +522,12 @@ def build(
     production = _prior_production(engine, prior_season)
     situation = _team_situation(engine, prior_season)
 
+    # Multi-season history, the volume/efficiency split, and the situation signals.
+    # All derived from the database - no extra downloads.
+    career = career_mod.build_career(engine, season)
+    efficiency = career_mod.build_efficiency(engine, season, career)
+    extra_situation = career_mod.build_situation(engine, season)
+
     bios = _player_bios() if use_optional_feeds else pd.DataFrame()
     snaps = _snap_shares(prior_season, bios) if use_optional_feeds else pd.DataFrame()
     depth = _depth_ranks(season) if use_optional_feeds else pd.DataFrame()
@@ -538,6 +570,9 @@ def build(
     )
     if not situation.empty:
         df = df.merge(situation, on="team", how="left")
+    for frame in (career, efficiency, extra_situation):
+        if not frame.empty:
+            df = df.merge(frame, on="player_id", how="left")
     for optional in (snaps, depth):
         if not optional.empty:
             df = df.merge(optional, on="external_id", how="left")
@@ -555,6 +590,21 @@ def build(
         "prior_last4_points_per_game": 0.0,
         "team_pass_attempts_prior": 0.0,
         "team_points_prior": 0.0,
+        "career_weighted_ppg": 0.0,
+        "career_weighted_targets_per_game": 0.0,
+        "career_weighted_carries_per_game": 0.0,
+        "career_weighted_target_share": 0.0,
+        "career_best_ppg": 0.0,
+        "career_seasons": 0,
+        "career_games": 0,
+        "prior_points_per_target": 0.0,
+        "career_points_per_target": 0.0,
+        "efficiency_delta": 0.0,
+        "qb_quality": 0.0,
+        "team_departed_target_share": 0.0,
+        "team_departed_carry_share": 0.0,
+        "teammate_top_target_share": 0.0,
+        "teammate_top_carry_share": 0.0,
     }
     for col, default in numeric_defaults.items():
         if col not in df.columns:
@@ -605,6 +655,21 @@ def build(
             "team_pass_attempts_prior": float(r.team_pass_attempts_prior),
             "team_points_prior": float(r.team_points_prior),
             "qb_changed": bool(r.qb_changed),
+            "career_weighted_ppg": float(r.career_weighted_ppg),
+            "career_weighted_targets_per_game": float(r.career_weighted_targets_per_game),
+            "career_weighted_carries_per_game": float(r.career_weighted_carries_per_game),
+            "career_weighted_target_share": float(r.career_weighted_target_share),
+            "career_best_ppg": float(r.career_best_ppg),
+            "career_seasons": int(r.career_seasons),
+            "career_games": int(r.career_games),
+            "prior_points_per_target": float(r.prior_points_per_target),
+            "career_points_per_target": float(r.career_points_per_target),
+            "efficiency_delta": float(r.efficiency_delta),
+            "qb_quality": float(r.qb_quality),
+            "team_departed_target_share": float(r.team_departed_target_share),
+            "team_departed_carry_share": float(r.team_departed_carry_share),
+            "teammate_top_target_share": float(r.teammate_top_target_share),
+            "teammate_top_carry_share": float(r.teammate_top_carry_share),
         }
         for r in df.itertuples(index=False)
     ]

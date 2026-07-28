@@ -67,6 +67,21 @@ class PreseasonFeatureVector(BaseModel):
     age: float | None = None
     team_pass_attempts_prior: float | None = None
     qb_changed: int | None = None
+    career_weighted_ppg: float | None = None
+    career_weighted_targets_per_game: float | None = None
+    career_weighted_carries_per_game: float | None = None
+    career_weighted_target_share: float | None = None
+    career_best_ppg: float | None = None
+    career_seasons: int | None = None
+    career_games: int | None = None
+    prior_points_per_target: float | None = None
+    career_points_per_target: float | None = None
+    efficiency_delta: float | None = None
+    qb_quality: float | None = None
+    team_departed_target_share: float | None = None
+    team_departed_carry_share: float | None = None
+    teammate_top_target_share: float | None = None
+    teammate_top_carry_share: float | None = None
 
 
 class FeatureVector(BaseModel):
