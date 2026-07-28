@@ -146,6 +146,10 @@ LAST = [
     "Dimitrov",
 ]
 
+# Every synthetic player carries this prefix, which is what makes them separable from
+# real ones after the fact - see --purge and the mixing guard in main().
+DEMO_ID_PREFIX = "DEMO-"
+
 TURNOVER_RATE = 0.12  # fraction of each position group replaced by rookies per season
 PEAK_AGE = 26.0
 
@@ -227,7 +231,7 @@ def build_universe(seasons: list[int], rng: np.random.Generator) -> list[Career]
         talent = max(0.4, float(rng.normal(base_volume, base_volume * 0.42)))
         rnd, pick = _draft_slot(talent, base_volume, rng)
         return Career(
-            external_id=f"DEMO-{counter:05d}",
+            external_id=f"{DEMO_ID_PREFIX}{counter:05d}",
             name=name,
             position=position,
             team=team,
@@ -349,6 +353,63 @@ def generate(
     return pd.DataFrame(rows), pd.DataFrame(roster_rows)
 
 
+def _census(engine) -> tuple[int, int]:
+    """(real players, synthetic players) currently in the database."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            real = conn.execute(
+                text("SELECT COUNT(*) FROM players WHERE external_id NOT LIKE :p"),
+                {"p": f"{DEMO_ID_PREFIX}%"},
+            ).scalar_one()
+            fake = conn.execute(
+                text("SELECT COUNT(*) FROM players WHERE external_id LIKE :p"),
+                {"p": f"{DEMO_ID_PREFIX}%"},
+            ).scalar_one()
+        except Exception:  # noqa: BLE001 - table may not exist yet
+            return 0, 0
+    return int(real), int(fake)
+
+
+def purge(engine) -> int:
+    """Remove every synthetic player and everything hanging off them.
+
+    Exists because synthetic and real data got mixed once: a demo seed ran against a
+    database that already held real seasons, and the leaderboard then showed invented
+    names next to real ones. Cascades handle stats, context and predictions.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        ids = [
+            r[0]
+            for r in conn.execute(
+                text("SELECT id FROM players WHERE external_id LIKE :p"),
+                {"p": f"{DEMO_ID_PREFIX}%"},
+            )
+        ]
+        if not ids:
+            return 0
+        # Delete children explicitly: SQLite does not enforce ON DELETE CASCADE unless
+        # foreign_keys pragma is on, and relying on that here would be fragile.
+        for table in ("player_stats", "player_context", "predictions"):
+            for i in range(0, len(ids), 500):
+                chunk = ids[i : i + 500]
+                conn.execute(
+                    text(
+                        f"DELETE FROM {table} WHERE player_id IN "  # noqa: S608 - ints only
+                        "(" + ",".join(str(int(x)) for x in chunk) + ")"
+                    )
+                )
+        conn.execute(
+            text("DELETE FROM players WHERE external_id LIKE :p"),
+            {"p": f"{DEMO_ID_PREFIX}%"},
+        )
+    log.info("demo_purged", players=len(ids))
+    return len(ids)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed synthetic seasons (no network)")
     parser.add_argument(
@@ -359,7 +420,41 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--weeks", type=int, default=17)
     parser.add_argument("--seed", type=int, default=2024)
+    parser.add_argument(
+        "--purge",
+        action="store_true",
+        help="Delete all synthetic players and exit - use this to clean real data that "
+        "got mixed with demo data",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Seed even though the database already contains real players",
+    )
     args = parser.parse_args(argv)
+
+    engine_for_checks = load.get_engine()
+
+    if args.purge:
+        removed = purge(engine_for_checks)
+        print(
+            f"\nRemoved {removed} synthetic players and their stats, context and " f"predictions.\n"
+        )
+        return 0
+
+    real, fake = _census(engine_for_checks)
+    if real and not args.force:
+        print(
+            f"\nRefusing to seed: this database already holds {real} real players.\n\n"
+            "Mixing synthetic and real data puts invented names on your leaderboard next\n"
+            "to real ones, and quietly corrupts model training. Pick one:\n\n"
+            "  python local.py --reset            start clean, then seed demo data\n"
+            "  python -m seed_demo --purge        remove synthetic rows, keep real data\n"
+            "  python -m seed_demo --force        seed anyway (you know what you are doing)\n"
+        )
+        return 1
+    if fake:
+        log.info("reseeding_over_existing_demo_data", synthetic_players=fake)
 
     seasons = sorted(int(s) for s in args.seasons.split(",") if s.strip())
     weekly, rosters = generate(seasons, args.weeks, args.seed)

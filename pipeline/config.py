@@ -9,7 +9,11 @@ CLEAN_DIR = DATA_DIR / "clean"
 MANUAL_DIR = Path(os.getenv("MANUAL_DATA_DIR", "/data/manual"))
 
 SEASONS = [int(s) for s in os.getenv("INGEST_SEASONS", "2024,2025").split(",") if s.strip()]
-POSITIONS = [p.strip().upper() for p in os.getenv("INGEST_POSITIONS", "WR,RB,TE").split(",")]
+# QB is included on purpose: it is not scored as a fantasy position here, but the
+# qb_changed feature needs quarterback rows to work out whether a team's starter changed,
+# and that is one of the biggest knowable swings for a receiver going into a season.
+# Without QBs the real run logged "no_qb_data" every time and the feature was dead.
+POSITIONS = [p.strip().upper() for p in os.getenv("INGEST_POSITIONS", "WR,RB,TE,QB").split(",")]
 
 ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://ml-service:9000")
 ACTIVE_MODEL_VERSION = os.getenv("ACTIVE_MODEL_VERSION", "xgboost_v1")

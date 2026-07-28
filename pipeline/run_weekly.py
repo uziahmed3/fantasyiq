@@ -47,13 +47,37 @@ def _resolve_season(engine, requested: int | None) -> int:
     return int(latest)
 
 
+# The regular season is 18 weeks; nflverse data continues into the playoffs (weeks
+# 19-22). Projecting "the week after the last one on file" therefore produced week 23,
+# which does not exist - the real run wrote 530 predictions for a phantom week while the
+# dashboard's week 1-18 selectors showed nothing.
+REGULAR_SEASON_WEEKS = 18
+
+
 def _next_week(engine, season: int) -> int:
+    """The next week worth projecting, clamped to the regular season.
+
+    Playoff weeks are in the data but are not what anyone sets a lineup for, and once the
+    season is over there is no "next week" at all - in that case fall back to projecting
+    week 1 of the following season, which is what the preseason model is for.
+    """
     with engine.connect() as conn:
         latest = conn.execute(
-            text("SELECT COALESCE(MAX(week), 0) FROM player_stats WHERE season = :s"),
-            {"s": season},
+            text("""
+                SELECT COALESCE(MAX(week), 0) FROM player_stats
+                WHERE season = :s AND week <= :cap
+            """),
+            {"s": season, "cap": REGULAR_SEASON_WEEKS},
         ).scalar_one()
-    return int(latest) + 1
+    nxt = int(latest) + 1
+    if nxt > REGULAR_SEASON_WEEKS:
+        log.info(
+            "regular_season_complete",
+            season=season,
+            hint="projecting the final week; use --week to override",
+        )
+        return REGULAR_SEASON_WEEKS
+    return nxt
 
 
 def _bust_prediction_cache() -> int:

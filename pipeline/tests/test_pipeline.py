@@ -179,3 +179,98 @@ def test_scheduler_always_targets_tuesday(now, expected_weekday):
     dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
     assert next_run(dt).weekday() == expected_weekday
     assert next_run(dt) > dt
+
+
+# ---------------------------------------------------------------- week clamping
+def test_next_week_clamps_to_the_regular_season(tmp_path):
+    """Real 2025 data runs to week 22 (playoffs), and the old code projected week 23 -
+    a week that does not exist, so 530 predictions landed somewhere nothing reads."""
+    from sqlalchemy import create_engine, text
+
+    import run_weekly
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path}/w.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE player_stats (player_id INT, season INT, week INT)"))
+        # A completed season including playoff weeks.
+        for wk in range(1, 23):
+            conn.execute(text("INSERT INTO player_stats VALUES (1, 2025, :w)"), {"w": wk})
+    assert run_weekly._next_week(engine, 2025) == run_weekly.REGULAR_SEASON_WEEKS
+
+
+def test_next_week_is_the_following_week_midseason(tmp_path):
+    from sqlalchemy import create_engine, text
+
+    import run_weekly
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path}/w2.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE player_stats (player_id INT, season INT, week INT)"))
+        for wk in range(1, 8):
+            conn.execute(text("INSERT INTO player_stats VALUES (1, 2025, :w)"), {"w": wk})
+    assert run_weekly._next_week(engine, 2025) == 8
+
+
+def test_quarterbacks_are_ingested_by_default():
+    """qb_changed needs QB rows to detect a change of starter. Without them the real run
+    logged no_qb_data on every season and the feature was silently dead."""
+    import importlib
+    import os
+
+    os.environ.pop("INGEST_POSITIONS", None)
+    import config
+
+    importlib.reload(config)
+    assert "QB" in config.POSITIONS
+
+
+# ---------------------------------------------------------------- demo/real isolation
+def test_synthetic_players_all_carry_the_demo_prefix():
+    """The prefix is the only thing that makes synthetic rows separable from real ones
+    after they are in the database, so every generated player must have it."""
+    import seed_demo
+
+    weekly, rosters = seed_demo.generate([2023], weeks=2, seed=1)
+    assert weekly["player_id"].str.startswith(seed_demo.DEMO_ID_PREFIX).all()
+    assert rosters["player_id"].str.startswith(seed_demo.DEMO_ID_PREFIX).all()
+
+
+def test_purge_removes_synthetic_rows_and_keeps_real_ones(tmp_path):
+    """Real 2021-2025 data got mixed with a demo seed once; purge is the recovery path."""
+    from sqlalchemy import create_engine, text
+
+    import seed_demo
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path}/mixed.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE players (id INTEGER PRIMARY KEY, external_id TEXT)"))
+        conn.execute(text("CREATE TABLE player_stats (player_id INT, season INT)"))
+        conn.execute(text("CREATE TABLE player_context (player_id INT, season INT)"))
+        conn.execute(text("CREATE TABLE predictions (player_id INT, season INT)"))
+        conn.execute(text("INSERT INTO players VALUES (1, '00-0036322')"))  # real
+        conn.execute(text("INSERT INTO players VALUES (2, 'DEMO-00001')"))  # synthetic
+        for table in ("player_stats", "player_context", "predictions"):
+            conn.execute(text(f"INSERT INTO {table} VALUES (1, 2024)"))
+            conn.execute(text(f"INSERT INTO {table} VALUES (2, 2024)"))
+
+    removed = seed_demo.purge(engine)
+    assert removed == 1
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM players")).scalar_one() == 1
+        assert conn.execute(text("SELECT external_id FROM players")).scalar_one() == "00-0036322"
+        # Children of the synthetic player must go too, and the real one's must survive.
+        for table in ("player_stats", "player_context", "predictions"):
+            rows = conn.execute(text(f"SELECT player_id FROM {table}")).scalars().all()
+            assert rows == [1], f"{table} not cleaned correctly: {rows}"
+
+
+def test_census_separates_real_from_synthetic(tmp_path):
+    from sqlalchemy import create_engine, text
+
+    import seed_demo
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path}/census.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE players (id INTEGER PRIMARY KEY, external_id TEXT)"))
+        conn.execute(text("INSERT INTO players VALUES (1, '00-1'), (2, 'DEMO-1'), (3, 'DEMO-2')"))
+    assert seed_demo._census(engine) == (1, 2)

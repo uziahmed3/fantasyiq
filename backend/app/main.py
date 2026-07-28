@@ -83,7 +83,23 @@ app.include_router(api_router, prefix=settings.api_v1_prefix)
 # end; both talk to this same API.
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.is_dir():
-    app.mount("/app", StaticFiles(directory=STATIC_DIR, html=True), name="dashboard")
+
+    class NoCacheStatic(StaticFiles):
+        """Serve the dashboard with caching disabled.
+
+        The file is edited in place and has no content hash in its name, so a browser
+        will happily keep serving yesterday's copy. That actually happened: a fix to the
+        season selectors shipped and the browser kept requesting season=2026 from the old
+        bundle. Correctness beats a few saved kilobytes on a local dev UI.
+        """
+
+        async def get_response(self, path: str, scope):  # type: ignore[override]
+            response = await super().get_response(path, scope)
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            return response
+
+    app.mount("/app", NoCacheStatic(directory=STATIC_DIR, html=True), name="dashboard")
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:
