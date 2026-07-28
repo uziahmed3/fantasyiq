@@ -18,7 +18,7 @@ import httpx
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.metrics import ML_LATENCY, PREDICTION_FAILURES
-from app.schemas.prediction import FeatureVector
+from app.schemas.prediction import FeatureVector, PreseasonFeatureVector
 
 
 class MLServiceError(RuntimeError):
@@ -60,6 +60,40 @@ class MLClient:
             elapsed = time.perf_counter() - started
             ML_LATENCY.observe(elapsed)
             logger.debug("ml_call", elapsed_ms=round(elapsed * 1000, 2))
+
+    def predict_preseason(
+        self, features: PreseasonFeatureVector, model_version: str | None = None
+    ) -> dict:
+        """Call the preseason endpoint. Nulls are sent as nulls, not zeros.
+
+        exclude_none would drop them, which is the same thing on the wire, but sending an
+        explicit null makes the request self-describing when you read it in a log: the
+        service can tell "we do not know his snap share" from "his snap share was 0".
+        """
+        payload = {
+            "features": features.model_dump(),
+            "model_version": model_version or settings.active_preseason_model_version,
+        }
+        started = time.perf_counter()
+        try:
+            with httpx.Client(timeout=self.timeout, trust_env=self.trust_env) as client:
+                resp = client.post(f"{self.base_url}/predict/preseason", json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.TimeoutException as exc:
+            PREDICTION_FAILURES.labels(reason="preseason_timeout").inc()
+            raise MLServiceError("ML service timed out") from exc
+        except httpx.HTTPStatusError as exc:
+            PREDICTION_FAILURES.labels(reason=f"preseason_http_{exc.response.status_code}").inc()
+            raise MLServiceError(f"ML service returned {exc.response.status_code}") from exc
+        except httpx.HTTPError as exc:
+            PREDICTION_FAILURES.labels(reason="preseason_unreachable").inc()
+            raise MLServiceError("ML service unreachable") from exc
+        except Exception as exc:  # noqa: BLE001
+            PREDICTION_FAILURES.labels(reason="preseason_client_error").inc()
+            raise MLServiceError(f"ML client error: {exc}") from exc
+        finally:
+            ML_LATENCY.observe(time.perf_counter() - started)
 
     def health(self) -> bool:
         """Never raises. /ready calls this, and a readiness probe that 500s is useless."""

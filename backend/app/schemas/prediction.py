@@ -25,6 +25,11 @@ class PredictionResponse(BaseModel):
     confidence: float | None = None
     model_version: str
     source: Literal["cache", "model"] = "model"
+    # Which of the two models answered, and why. A week-1 or rookie projection rests on
+    # completely different evidence than a mid-season one, and the caller should be able
+    # to tell them apart without inspecting the model version string.
+    mode: Literal["in_season", "preseason"] = "in_season"
+    basis: str | None = None
 
 
 class PredictionRecord(BaseModel):
@@ -36,6 +41,30 @@ class PredictionRecord(BaseModel):
     confidence: float | None
     model_version: str
     created_at: datetime
+
+
+class PreseasonFeatureVector(BaseModel):
+    """Preseason contract. Mirrors ml-service/app/features.PRESEASON_FEATURE_ORDER.
+
+    Every field is optional because absence is meaningful and expected here: a rookie has
+    no prior production, and the snap-count / depth-chart feeds are best-effort.
+    """
+
+    prior_points_per_game: float | None = None
+    prior_last4_points_per_game: float | None = None
+    prior_targets_per_game: float | None = None
+    prior_target_share: float | None = None
+    prior_yards_per_game: float | None = None
+    prior_games: int | None = None
+    prior_snap_share: float | None = None
+    depth_chart_rank: int | None = None
+    draft_round: int | None = None
+    draft_pick: int | None = None
+    years_experience: int | None = None
+    is_rookie: int | None = None
+    age: float | None = None
+    team_pass_attempts_prior: float | None = None
+    qb_changed: int | None = None
 
 
 class FeatureVector(BaseModel):

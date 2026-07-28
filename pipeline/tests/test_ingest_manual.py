@@ -68,10 +68,96 @@ def _seed(manual_dir, seasons):
 
 def test_urls_are_the_real_nflverse_paths():
     pairs = dict(ingest.manual_files([2024]))
+    # Canonical (current) naming is what the manual listing shows.
     assert pairs["player_stats_2024.parquet"].endswith(
-        "/releases/download/player_stats/player_stats_2024.parquet"
+        "/releases/download/stats_player/stats_player_week_2024.parquet"
     )
     assert pairs["roster_2024.parquet"].endswith("/releases/download/rosters/roster_2024.parquet")
+
+
+def test_weekly_url_keeps_a_fallback_candidate():
+    """nflverse renamed this release once already; the old path stays as a fallback so a
+    rename does not look like 'no data for this season'."""
+    assert len(ingest.WEEKLY_URL_CANDIDATES) >= 2
+    assert any("stats_player_week_" in u for u in ingest.WEEKLY_URL_CANDIDATES)
+    assert any("player_stats/player_stats_" in u for u in ingest.WEEKLY_URL_CANDIDATES)
+
+
+def test_download_any_falls_through_to_the_next_candidate(tmp_path, monkeypatch):
+    dest = tmp_path / "x.parquet"
+    tried = []
+
+    def fake_download(url, d):
+        tried.append(url)
+        if "stats_player_week" in url:
+            raise OSError("404")
+        d.write_bytes(b"ok")
+        return d
+
+    monkeypatch.setattr(ingest, "_download", fake_download)
+    out = ingest._download_any(ingest.WEEKLY_URL_CANDIDATES, 2025, dest)
+    assert out == dest
+    assert len(tried) == 2, "must try the fallback after the first 404"
+
+
+def test_download_any_raises_when_every_candidate_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(ingest, "_download", lambda *a, **k: (_ for _ in ()).throw(OSError("404")))
+    with pytest.raises(ingest.AllCandidatesFailed) as exc:
+        ingest._download_any(ingest.WEEKLY_URL_CANDIDATES, 2025, tmp_path / "y.parquet")
+    # The message must name what was tried, or debugging this is guesswork.
+    assert "stats_player_week_2025" in str(exc.value)
+    assert "player_stats_2025" in str(exc.value)
+
+
+def test_normalise_weekly_maps_new_schema_names():
+    """The new release renamed several columns; downstream must see one stable shape."""
+    new_schema = pd.DataFrame(
+        [
+            {
+                "player_id": "1",
+                "player_name": "A",
+                "team": "MIN",
+                "opponent": "GB",
+                "season": 2025,
+                "week": 1,
+                "targets": 8,
+                "rec": 6,
+                "rec_yds": 70.0,
+                "rec_td": 1,
+                "rush_yds": 0.0,
+                "rush_td": 0,
+                "position": "WR",
+            }
+        ]
+    )
+    out = ingest._normalise_weekly(new_schema)
+    for expected in [
+        "player_display_name",
+        "recent_team",
+        "opponent_team",
+        "receptions",
+        "receiving_yards",
+        "receiving_tds",
+    ]:
+        assert expected in out.columns, f"{expected} missing after normalisation"
+
+
+def test_normalise_weekly_leaves_old_schema_alone():
+    old = pd.DataFrame(
+        [
+            {
+                "player_id": "1",
+                "player_display_name": "A",
+                "recent_team": "MIN",
+                "opponent_team": "GB",
+                "receptions": 6,
+                "receiving_yards": 70.0,
+                "receiving_tds": 1,
+            }
+        ]
+    )
+    out = ingest._normalise_weekly(old)
+    assert out.equals(old)
 
 
 def test_status_reports_missing_files(manual_dir):
@@ -142,7 +228,7 @@ def test_print_urls_lists_every_file(manual_dir, capsys):
     _seed(manual_dir, [2024])
     ingest.print_urls([2024, 2025])
     out = capsys.readouterr().out
-    assert "player_stats_2024.parquet" in out
+    assert "stats_player_week_2024.parquet" in out
     assert "roster_2025.parquet" in out
     assert "[have]" in out and "[NEED]" in out
 

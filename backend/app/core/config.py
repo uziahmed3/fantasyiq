@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # a corporate machine it breaks every prediction. Off by default; opt in if needed.
     ml_service_trust_env: bool = False
     active_model_version: str = "xgboost_v1"
+    # Separate knob: the preseason model is trained on different data and is promoted
+    # independently of the in-season one.
+    active_preseason_model_version: str = "preseason_v1"
 
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 

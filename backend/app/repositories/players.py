@@ -8,7 +8,7 @@ tuning happen in one place.
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Player, PlayerStats, Prediction
+from app.models import Player, PlayerContext, PlayerStats, Prediction
 
 
 class PlayerRepository:
@@ -73,6 +73,23 @@ class StatsRepository:
         )
         return list(self.db.scalars(stmt).all())
 
+    def games_before_week(self, player_id: int, season: int, week: int) -> int:
+        """How many games this player has already played this season.
+
+        This is the routing signal: zero means the in-season features would all be zero,
+        so the preseason model should answer instead.
+        """
+        return int(
+            self.db.scalar(
+                select(func.count(PlayerStats.id)).where(
+                    PlayerStats.player_id == player_id,
+                    PlayerStats.season == season,
+                    PlayerStats.week < week,
+                )
+            )
+            or 0
+        )
+
     def season_aggregate(self, player_id: int, season: int, before_week: int) -> tuple[float, int]:
         row = self.db.execute(
             select(func.avg(PlayerStats.fantasy_points), func.count(PlayerStats.id)).where(
@@ -105,6 +122,33 @@ class StatsRepository:
         )
         opp = opponent.upper()
         return rows.index(opp) + 1 if opp in rows else 16
+
+
+class ContextRepository:
+    """Preseason context: what was knowable before the season started."""
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def get(self, player_id: int, season: int) -> PlayerContext | None:
+        return self.db.scalar(
+            select(PlayerContext).where(
+                PlayerContext.player_id == player_id, PlayerContext.season == season
+            )
+        )
+
+    def latest_at_or_before(self, player_id: int, season: int) -> PlayerContext | None:
+        """Fall back to the most recent earlier context if this season has none built yet.
+
+        Stale context still beats no projection at all - and the response reports which
+        season the context came from, so a caller can see it is not current.
+        """
+        return self.db.scalar(
+            select(PlayerContext)
+            .where(PlayerContext.player_id == player_id, PlayerContext.season <= season)
+            .order_by(PlayerContext.season.desc())
+            .limit(1)
+        )
 
 
 class PredictionRepository:

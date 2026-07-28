@@ -303,7 +303,13 @@ def load_real(env: dict[str, str], source: str) -> None:
 def train(env: dict[str, str]) -> None:
     step("Training models on the loaded data")
     ml = ROOT / "ml-service"
-    for module in ("train.train_baseline", "train.train_xgboost", "train.train_torch"):
+    for module in (
+        "train.train_baseline",
+        "train.train_xgboost",
+        "train.train_torch",
+        # Needs two seasons of paired data; skips itself with a clear message otherwise.
+        "train.train_preseason",
+    ):
         if run([VENV_PY, "-m", module], ml, env, module, fatal=False) != 0:
             warn(f"{module} failed - continuing with the models that did train.")
     step("Model comparison - this is the accuracy on your data")

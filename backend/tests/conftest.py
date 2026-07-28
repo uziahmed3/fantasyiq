@@ -21,8 +21,8 @@ from app.core import cache  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Player, PlayerStats, Prediction  # noqa: E402
-from app.schemas.prediction import FeatureVector  # noqa: E402
+from app.models import Player, PlayerContext, PlayerStats, Prediction  # noqa: E402
+from app.schemas.prediction import FeatureVector, PreseasonFeatureVector  # noqa: E402
 from app.services import ml_client as ml_client_module  # noqa: E402
 
 TEST_URL = "sqlite+pysqlite:///:memory:"
@@ -56,6 +56,7 @@ class StubMLClient:
 
     def __init__(self) -> None:
         self.calls: list[FeatureVector] = []
+        self.preseason_calls: list[PreseasonFeatureVector] = []
         self.fail_with: Exception | None = None
 
     def predict(self, features: FeatureVector, model_version: str | None = None) -> dict:
@@ -66,6 +67,24 @@ class StubMLClient:
             "prediction": round(features.fantasy_points_last_3 * 1.05 + 2.0, 3),
             "confidence": 0.81,
             "model_version": model_version or "xgboost_v1",
+        }
+
+    def predict_preseason(
+        self, features: PreseasonFeatureVector, model_version: str | None = None
+    ) -> dict:
+        if self.fail_with:
+            raise self.fail_with
+        self.preseason_calls.append(features)
+        prior = features.prior_points_per_game or 0.0
+        rookie = bool(features.is_rookie)
+        pick = features.draft_pick or 300
+        value = 13.0 * (1.0 - min(pick, 300) / 300.0) if rookie else prior * 0.95
+        return {
+            "prediction": round(value, 3),
+            "confidence": 0.35 if rookie else 0.8,
+            "model_version": model_version or "preseason_v1",
+            "framework": "stub",
+            "basis": "rookie - draft capital" if rookie else "prior season",
         }
 
     def health(self) -> bool:
@@ -162,3 +181,73 @@ def seed(db_session):
     )
     db_session.commit()
     return {"jj": jj, "chase": chase}
+
+
+@pytest.fixture
+def rookie(db_session):
+    """A first-round rookie: on a roster, zero games, context but no production.
+
+    This is the case the in-season model cannot answer at all.
+    """
+    player = Player(
+        id=99, name="Rook Firstround", team="LV", position="WR", age=22, external_id="00-0099999"
+    )
+    db_session.add(player)
+    db_session.flush()
+    db_session.add(
+        PlayerContext(
+            player_id=player.id,
+            season=2023,
+            team="LV",
+            prior_games=0,
+            prior_points_per_game=0.0,
+            prior_targets_per_game=0.0,
+            prior_yards_per_game=0.0,
+            prior_target_share=0.0,
+            prior_last4_points_per_game=0.0,
+            prior_snap_share=None,
+            depth_chart_rank=2,
+            draft_round=1,
+            draft_pick=6,
+            rookie_season=2023,
+            years_experience=0,
+            is_rookie=True,
+            age=22.0,
+            team_pass_attempts_prior=3800.0,
+            team_points_prior=210.0,
+            qb_changed=False,
+        )
+    )
+    db_session.commit()
+    return player
+
+
+@pytest.fixture
+def veteran_with_context(db_session, seed):
+    """Justin Jefferson also gets a context row, so week-1 routing can be tested."""
+    db_session.add(
+        PlayerContext(
+            player_id=15,
+            season=2024,
+            team="MIN",
+            prior_games=4,
+            prior_points_per_game=19.6,
+            prior_targets_per_game=10.75,
+            prior_yards_per_game=101.25,
+            prior_target_share=0.28,
+            prior_last4_points_per_game=19.6,
+            prior_snap_share=0.88,
+            depth_chart_rank=1,
+            draft_round=1,
+            draft_pick=22,
+            rookie_season=2020,
+            years_experience=4,
+            is_rookie=False,
+            age=25.0,
+            team_pass_attempts_prior=4100.0,
+            team_points_prior=240.0,
+            qb_changed=True,
+        )
+    )
+    db_session.commit()
+    return 15

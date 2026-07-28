@@ -2,9 +2,15 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from app.features import FEATURE_ORDER, FeatureContractError, to_matrix, to_row
+from app.features import (
+    FEATURE_ORDER,
+    PRESEASON_FEATURE_ORDER,
+    FeatureContractError,
+    to_matrix,
+    to_row,
+)
 from app.main import app
-from app.registry import FALLBACK_VERSION, ModelRegistry
+from app.registry import FALLBACK_VERSION, PRESEASON_FALLBACK_VERSION, ModelRegistry
 
 client = TestClient(app)
 
@@ -26,10 +32,101 @@ def test_health():
     assert client.get("/health").json()["status"] == "ok"
 
 
-def test_models_endpoint_exposes_contract():
+def test_models_endpoint_exposes_both_contracts():
+    """Two models, two feature contracts - /models must describe both, because a caller
+    building either kind of request needs to know the shape."""
     body = client.get("/models").json()
-    assert body["feature_order"] == list(FEATURE_ORDER)
+    assert body["in_season"]["feature_order"] == list(FEATURE_ORDER)
+    assert body["preseason"]["feature_order"] == list(PRESEASON_FEATURE_ORDER)
     assert FALLBACK_VERSION in body["available"]
+    assert PRESEASON_FALLBACK_VERSION in body["available"]
+
+
+def test_preseason_tolerates_a_player_we_know_nothing_about():
+    """An empty payload is the rookie-with-no-draft-data case; it must still answer."""
+    r = client.post("/predict/preseason", json={"features": {}})
+    assert r.status_code == 200
+    assert r.json()["prediction"] >= 0
+
+
+def test_preseason_rewards_earlier_draft_picks():
+    def project(pick):
+        return client.post(
+            "/predict/preseason",
+            json={
+                "features": {"is_rookie": 1, "draft_pick": pick, "depth_chart_rank": 2},
+                "model_version": PRESEASON_FALLBACK_VERSION,
+            },
+        ).json()["prediction"]
+
+    assert project(5) > project(60) > project(250)
+
+
+def test_preseason_penalises_a_quarterback_change():
+    base = {
+        "prior_points_per_game": 15.0,
+        "prior_last4_points_per_game": 15.0,
+        "prior_games": 16,
+        "depth_chart_rank": 1,
+        "prior_snap_share": 0.85,
+        "is_rookie": 0,
+    }
+
+    def project(**extra):
+        return client.post(
+            "/predict/preseason",
+            json={"features": {**base, **extra}, "model_version": PRESEASON_FALLBACK_VERSION},
+        ).json()["prediction"]
+
+    assert project(qb_changed=1) < project(qb_changed=0)
+
+
+def test_preseason_confidence_is_lower_for_rookies():
+    """A rookie projection rests on draft position, not production. Reporting it as
+    equally confident as a veteran's would be the dishonest choice."""
+    rookie = client.post(
+        "/predict/preseason",
+        json={"features": {"is_rookie": 1, "draft_pick": 6}},
+    ).json()["confidence"]
+    veteran = client.post(
+        "/predict/preseason",
+        json={
+            "features": {
+                "is_rookie": 0,
+                "prior_games": 16,
+                "prior_points_per_game": 15.0,
+                "depth_chart_rank": 1,
+                "prior_snap_share": 0.8,
+            }
+        },
+    ).json()["confidence"]
+    assert rookie < veteran
+
+
+def test_preseason_batch_matches_single_calls():
+    items = [
+        {"is_rookie": 1, "draft_pick": 6},
+        {"is_rookie": 0, "prior_games": 16, "prior_points_per_game": 12.0},
+    ]
+    batch = client.post(
+        "/predict/preseason/batch",
+        json={"items": items, "model_version": PRESEASON_FALLBACK_VERSION},
+    ).json()["predictions"]
+    singles = [
+        client.post(
+            "/predict/preseason",
+            json={"features": i, "model_version": PRESEASON_FALLBACK_VERSION},
+        ).json()["prediction"]
+        for i in items
+    ]
+    assert np.allclose(batch, singles, atol=1e-3)
+
+
+def test_preseason_rejects_unknown_feature_names():
+    from app.features import FeatureContractError, preseason_row
+
+    with pytest.raises(FeatureContractError):
+        preseason_row({"not_a_feature": 1.0})
 
 
 def test_feature_order_row_shape():

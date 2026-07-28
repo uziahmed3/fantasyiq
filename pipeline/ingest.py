@@ -62,8 +62,28 @@ ROSTER_COLUMNS = ["player_id", "player_name", "position", "team", "age", "height
 DOWNLOAD_DIR = DATA_DIR / "downloads"
 
 NFLVERSE = "https://github.com/nflverse/nflverse-data/releases/download"
-WEEKLY_URL = f"{NFLVERSE}/player_stats/player_stats_{{season}}.parquet"
-ROSTER_URL = f"{NFLVERSE}/rosters/roster_{{season}}.parquet"
+
+# nflverse renamed this release: weekly player stats moved from `player_stats` to
+# `stats_player`, and the old files stop being updated around 2024. Rather than pin one
+# name and break the next time upstream reorganises, try candidates in order and use the
+# first that downloads. The failure mode we are avoiding is the bad one: a 404 for a
+# recent season that looks like "no data for 2025" instead of "wrong URL".
+WEEKLY_URL_CANDIDATES = (
+    f"{NFLVERSE}/stats_player/stats_player_week_{{season}}.parquet",
+    f"{NFLVERSE}/player_stats/player_stats_{{season}}.parquet",
+)
+ROSTER_URL_CANDIDATES = (f"{NFLVERSE}/rosters/roster_{{season}}.parquet",)
+
+# Context data for preseason projections. players.parquet and draft_picks.parquet are
+# single combined files; the rest are per-season.
+PLAYERS_URL = f"{NFLVERSE}/players/players.parquet"
+DRAFT_URL = f"{NFLVERSE}/draft_picks/draft_picks.parquet"
+SNAPS_URL_CANDIDATES = (f"{NFLVERSE}/snap_counts/snap_counts_{{season}}.parquet",)
+DEPTH_URL_CANDIDATES = (f"{NFLVERSE}/depth_charts/depth_charts_{{season}}.parquet",)
+
+# Kept for the manual-download listing and for tests that assert the canonical names.
+WEEKLY_URL = WEEKLY_URL_CANDIDATES[0]
+ROSTER_URL = ROSTER_URL_CANDIDATES[0]
 
 
 class MissingManualData(FileNotFoundError):
@@ -122,6 +142,29 @@ def _load_manual(seasons: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
     return weekly, rosters
 
 
+class AllCandidatesFailed(RuntimeError):
+    pass
+
+
+def _download_any(urls: tuple[str, ...], season: int | None, dest: Path) -> Path:
+    """Try each candidate URL in order; return the first that downloads.
+
+    A 404 means "this release no longer carries that file", which is a naming problem,
+    not a missing-data problem - so we keep going rather than reporting no data.
+    """
+    if dest.exists() and dest.stat().st_size > 0:
+        return dest
+    errors: list[str] = []
+    for template in urls:
+        url = template.format(season=season) if season is not None else template
+        try:
+            return _download(url, dest)
+        except Exception as exc:  # noqa: BLE001 - try the next candidate
+            errors.append(f"{url} -> {type(exc).__name__}: {exc}")
+            log.warning("download_candidate_failed", url=url, error=str(exc))
+    raise AllCandidatesFailed("none of the candidate URLs worked:\n  " + "\n  ".join(errors))
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=20))
 def _download(url: str, dest: Path) -> Path:
     """Fetch one nflverse parquet release asset to disk.
@@ -146,17 +189,54 @@ def _fetch_weekly(seasons: list[int]) -> pd.DataFrame:
     log.info("fetch_weekly_start", seasons=seasons)
     frames = [
         pd.read_parquet(
-            _download(WEEKLY_URL.format(season=s), DOWNLOAD_DIR / f"player_stats_{s}.parquet")
+            _download_any(WEEKLY_URL_CANDIDATES, s, DOWNLOAD_DIR / f"player_stats_{s}.parquet")
         )
         for s in seasons
     ]
-    return pd.concat(frames, ignore_index=True)
+    return _normalise_weekly(pd.concat(frames, ignore_index=True))
+
+
+def _normalise_weekly(df: pd.DataFrame) -> pd.DataFrame:
+    """Reconcile column names across the old `player_stats` and new `stats_player` schemas.
+
+    Upstream renamed several columns in the move. Mapping them here means the cleaner and
+    everything downstream see one stable shape regardless of which release answered.
+    """
+    aliases = {
+        "player_name": "player_display_name",
+        "player_display_name": "player_display_name",
+        "team": "recent_team",
+        "recent_team": "recent_team",
+        "opponent": "opponent_team",
+        "opponent_team": "opponent_team",
+        "receiving_tds": "receiving_tds",
+        "rec_td": "receiving_tds",
+        "receiving_yards": "receiving_yards",
+        "rec_yds": "receiving_yards",
+        "receptions": "receptions",
+        "rec": "receptions",
+        "targets": "targets",
+        "rushing_yards": "rushing_yards",
+        "rush_yds": "rushing_yards",
+        "rushing_tds": "rushing_tds",
+        "rush_td": "rushing_tds",
+        "fantasy_points_ppr": "fantasy_points_ppr",
+    }
+    renames = {
+        src: dst
+        for src, dst in aliases.items()
+        if src in df.columns and src != dst and dst not in df.columns
+    }
+    if renames:
+        log.info("weekly_columns_renamed", mapping=renames)
+        df = df.rename(columns=renames)
+    return df
 
 
 def _fetch_rosters(seasons: list[int]) -> pd.DataFrame:
     frames = [
         pd.read_parquet(
-            _download(ROSTER_URL.format(season=s), DOWNLOAD_DIR / f"roster_{s}.parquet")
+            _download_any(ROSTER_URL_CANDIDATES, s, DOWNLOAD_DIR / f"roster_{s}.parquet")
         )
         for s in seasons
     ]

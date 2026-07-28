@@ -25,9 +25,9 @@ from logging_setup import log
 
 UPSERT_PLAYER = text("""
 INSERT INTO players (external_id, name, team, position, age, height_inches, weight_lbs,
-                     created_at, updated_at)
+                     draft_round, draft_pick, rookie_season, created_at, updated_at)
 VALUES (:external_id, :name, :team, :position, :age, :height_inches, :weight_lbs,
-        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        :draft_round, :draft_pick, :rookie_season, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (external_id) DO UPDATE SET
     name          = EXCLUDED.name,
     team          = EXCLUDED.team,
@@ -35,6 +35,10 @@ ON CONFLICT (external_id) DO UPDATE SET
     age           = COALESCE(EXCLUDED.age, players.age),
     height_inches = COALESCE(EXCLUDED.height_inches, players.height_inches),
     weight_lbs    = COALESCE(EXCLUDED.weight_lbs, players.weight_lbs),
+    -- Draft facts never change; once known, never overwrite with a null.
+    draft_round   = COALESCE(EXCLUDED.draft_round, players.draft_round),
+    draft_pick    = COALESCE(EXCLUDED.draft_pick, players.draft_pick),
+    rookie_season = COALESCE(EXCLUDED.rookie_season, players.rookie_season),
     updated_at    = CURRENT_TIMESTAMP
 RETURNING id
 """)
@@ -94,6 +98,9 @@ def upsert_players(engine: Engine, weekly: pd.DataFrame, rosters: pd.DataFrame) 
                     "age": _clean_int(meta.get("age")),
                     "height_inches": _clean_int(meta.get("height_inches")),
                     "weight_lbs": _clean_int(meta.get("weight_lbs")),
+                    "draft_round": _clean_int(meta.get("draft_round")),
+                    "draft_pick": _clean_int(meta.get("draft_pick")),
+                    "rookie_season": _clean_int(meta.get("rookie_season")),
                 },
             ).scalar_one()
             id_map[str(row.player_id)] = int(pid)

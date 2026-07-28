@@ -18,6 +18,7 @@ import pandas as pd
 from sqlalchemy import text
 
 import clean
+import context as context_mod
 import features as features_mod
 import ingest
 import load
@@ -101,6 +102,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--skip-score", action="store_true", help="ETL only, no predictions")
     parser.add_argument(
+        "--skip-context",
+        action="store_true",
+        help="Do not rebuild preseason context (skips the optional snap/depth downloads)",
+    )
+    parser.add_argument(
         "--score-only",
         action="store_true",
         help="Skip the whole ETL and just regenerate projections from what is already "
@@ -134,6 +140,16 @@ def main(argv: list[str] | None = None) -> int:
             rosters = pd.read_parquet(CLEAN_DIR / "rosters.parquet")
             id_map = load.upsert_players(engine, weekly, rosters)
             stats["stats_rows"] = load.upsert_stats(engine, weekly, id_map)
+
+        if not args.skip_context:
+            # Context is what makes a week-1 or rookie projection possible. Rebuilt every
+            # run because depth charts and rosters move during the season.
+            target_season = _resolve_season(engine, args.season)
+            log.info("stage_start", stage="context", season=target_season)
+            try:
+                stats["context_rows"] = context_mod.build(engine, target_season)
+            except Exception as exc:  # noqa: BLE001 - optional feeds must not fail the run
+                log.warning("context_build_failed", error=str(exc), error_type=type(exc).__name__)
 
         if not args.skip_score:
             season = _resolve_season(engine, args.season)

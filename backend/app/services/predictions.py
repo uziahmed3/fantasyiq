@@ -1,12 +1,28 @@
-"""Prediction orchestration: features -> cache -> model -> persist.
+"""Prediction orchestration: route -> features -> cache -> model -> persist.
+
+Two models sit behind one endpoint, chosen by what evidence exists:
+
+    games played this season == 0  ->  preseason model
+        prior-season production, target share, snap share, depth-chart rank,
+        draft capital, team QB situation. The only path that can project a
+        rookie, or anyone in week 1.
+
+    games played this season >= 1  ->  in-season model
+        rolling 3-game form. More accurate once it has data, and useless before.
+
+The router is deliberately a data-availability check rather than a week-number check:
+"week 1" and "has not played" are usually the same thing but not always - a player
+returning from injury in week 8 has no rolling form either, and gets the preseason
+treatment for the same reason.
 
 Request flow:
     /predict
-       |-- build feature vector from Postgres (rolling windows, prior weeks only)
-       |-- Redis GET  ---- hit --> return (source="cache")
-       |-- miss --> POST ml-service/predict
+       |-- count games played this season   (routing decision)
+       |-- build the matching feature vector from the database
+       |-- cache GET  ---- hit --> return (source="cache")
+       |-- miss --> POST ml-service /predict or /predict/preseason
        |-- write predictions row (audit log)
-       |-- Redis SETEX (TTL)
+       |-- cache SETEX (TTL)
 """
 
 from sqlalchemy.orm import Session
@@ -15,8 +31,18 @@ from app.core.cache import cache_get, cache_set, prediction_key
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.metrics import PREDICTIONS
-from app.repositories.players import PlayerRepository, PredictionRepository, StatsRepository
-from app.schemas.prediction import FeatureVector, PredictionRequest, PredictionResponse
+from app.repositories.players import (
+    ContextRepository,
+    PlayerRepository,
+    PredictionRepository,
+    StatsRepository,
+)
+from app.schemas.prediction import (
+    FeatureVector,
+    PredictionRequest,
+    PredictionResponse,
+    PreseasonFeatureVector,
+)
 from app.services.ml_client import MLClient, ml_client
 
 
@@ -30,6 +56,7 @@ class PredictionService:
         self.players = PlayerRepository(db)
         self.stats = StatsRepository(db)
         self.predictions = PredictionRepository(db)
+        self.context = ContextRepository(db)
         self.ml = client or ml_client
 
     def build_features(self, req: PredictionRequest) -> FeatureVector:
@@ -53,20 +80,76 @@ class PredictionService:
             is_home=int(req.is_home),
         )
 
+    def build_preseason_features(self, req: PredictionRequest) -> PreseasonFeatureVector | None:
+        """Assemble the preseason vector from player_context. None if we have no context."""
+        ctx = self.context.get(req.player_id, req.season)
+        if ctx is None:
+            # Context for this season has not been built; an older one is still useful.
+            ctx = self.context.latest_at_or_before(req.player_id, req.season)
+        if ctx is None:
+            return None
+        return PreseasonFeatureVector(
+            prior_points_per_game=ctx.prior_points_per_game,
+            prior_last4_points_per_game=ctx.prior_last4_points_per_game,
+            prior_targets_per_game=ctx.prior_targets_per_game,
+            prior_target_share=ctx.prior_target_share,
+            prior_yards_per_game=ctx.prior_yards_per_game,
+            prior_games=ctx.prior_games,
+            prior_snap_share=ctx.prior_snap_share,
+            depth_chart_rank=ctx.depth_chart_rank,
+            draft_round=ctx.draft_round,
+            draft_pick=ctx.draft_pick,
+            years_experience=ctx.years_experience,
+            is_rookie=int(bool(ctx.is_rookie)),
+            age=ctx.age,
+            team_pass_attempts_prior=ctx.team_pass_attempts_prior,
+            qb_changed=int(bool(ctx.qb_changed)),
+        )
+
+    def choose_mode(self, req: PredictionRequest) -> str:
+        """'preseason' when the player has no games this season, else 'in_season'."""
+        played = self.stats.games_before_week(req.player_id, req.season, req.week)
+        return "in_season" if played >= 1 else "preseason"
+
     def predict(self, req: PredictionRequest, use_cache: bool = True) -> PredictionResponse:
         player = self.players.get(req.player_id)
         if player is None:
             raise PlayerNotFound(f"player {req.player_id} not found")
 
-        model_version = settings.active_model_version
-        key = prediction_key(req.player_id, req.week, req.opponent, model_version)
+        mode = self.choose_mode(req)
+        if mode == "preseason":
+            model_version = settings.active_preseason_model_version
+        else:
+            model_version = settings.active_model_version
+
+        # Mode is part of the cache key: the two models answer the same question with
+        # different evidence, and must never serve each other's cached values.
+        key = prediction_key(req.player_id, req.week, f"{req.opponent}:{mode}", model_version)
 
         if use_cache and (cached := cache_get(key)) is not None:
             PREDICTIONS.labels(model_version=model_version, source="cache").inc()
             return PredictionResponse(**cached, source="cache")
 
-        features = self.build_features(req)
-        result = self.ml.predict(features, model_version)
+        basis: str | None = None
+        if mode == "preseason":
+            preseason_features = self.build_preseason_features(req)
+            if preseason_features is None:
+                # No context row at all - fall back to the in-season path, which will
+                # produce a weak zero-history projection rather than nothing.
+                logger.warning(
+                    "no_preseason_context",
+                    player_id=req.player_id,
+                    season=req.season,
+                    hint="run `python -m context --season <season>` in the pipeline",
+                )
+                mode = "in_season"
+                model_version = settings.active_model_version
+                result = self.ml.predict(self.build_features(req), model_version)
+            else:
+                result = self.ml.predict_preseason(preseason_features, model_version)
+                basis = result.get("basis")
+        else:
+            result = self.ml.predict(self.build_features(req), model_version)
 
         response = PredictionResponse(
             player_id=player.id,
@@ -78,6 +161,8 @@ class PredictionService:
             confidence=result.get("confidence"),
             model_version=result.get("model_version", model_version),
             source="model",
+            mode=mode,  # type: ignore[arg-type]
+            basis=basis,
         )
 
         self.predictions.record(
@@ -99,6 +184,7 @@ class PredictionService:
             "prediction_served",
             player_id=player.id,
             week=req.week,
+            mode=mode,
             prediction=response.prediction,
             model_version=response.model_version,
         )
