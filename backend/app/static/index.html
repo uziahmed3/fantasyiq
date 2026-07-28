@@ -126,12 +126,30 @@ async function api(path, opts) {
 }
 
 // ---- setup selectors -------------------------------------------------------
-const nowYear = new Date().getFullYear();
-for (let w = 1; w <= 18; w++) {
-  $("week").insertAdjacentHTML("beforeend", `<option value="${w}"${w === 6 ? " selected" : ""}>Week ${w}</option>`);
-}
-for (let y = nowYear; y >= nowYear - 6; y--) {
-  $("season").insertAdjacentHTML("beforeend", `<option value="${y}">${y}</option>`);
+// Populated from /info, so the defaults land on a season that actually has data
+// rather than on today's calendar year (which is usually empty).
+async function buildSelectors() {
+  let seasons = [];
+  let latestWeek = null;
+  try {
+    const info = await fetch("/info").then(r => r.json());
+    seasons = info.seasons_with_data || [];
+    latestWeek = info.latest_week;
+  } catch { /* fall through to the calendar-year guess */ }
+
+  if (!seasons.length) {
+    const y = new Date().getFullYear();
+    seasons = [y, y - 1, y - 2, y - 3];
+  }
+  $("season").innerHTML = seasons
+    .map((y, i) => `<option value="${y}"${i === 0 ? " selected" : ""}>${y}</option>`)
+    .join("");
+
+  // Default to the week after the last one played - that is the week you project.
+  const defaultWeek = latestWeek ? Math.min(latestWeek + 1, 18) : 6;
+  $("week").innerHTML = Array.from({ length: 18 }, (_, i) => i + 1)
+    .map(w => `<option value="${w}"${w === defaultWeek ? " selected" : ""}>Week ${w}</option>`)
+    .join("");
 }
 
 async function health() {
@@ -246,9 +264,12 @@ $("season").onchange = loadRankings;
 $("project").onclick = project;
 $("projectAgain").onclick = project;
 
-health();
-loadRankings();
-setInterval(health, 15000);
+(async () => {
+  await buildSelectors();   // must finish before the first rankings fetch
+  health();
+  loadRankings();
+  setInterval(health, 15000);
+})();
 </script>
 </body>
 </html>

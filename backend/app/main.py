@@ -102,8 +102,31 @@ def health() -> dict:
 @app.get("/info", tags=["ops"], summary="What this instance is actually running")
 def info() -> dict:
     """Handy when the same code runs on SQLite+memory-cache locally and
-    Postgres+ElastiCache in AWS - one call says which."""
+    Postgres+ElastiCache in AWS - one call says which.
+
+    Also reports which seasons and weeks actually hold data, so the dashboard can
+    default its selectors to something populated instead of to today's calendar year.
+    """
     from app.core.cache import backend_name
+
+    seasons: list[int] = []
+    latest_week: int | None = None
+    try:
+        with engine.connect() as conn:
+            seasons = [
+                int(r[0])
+                for r in conn.execute(
+                    text("SELECT DISTINCT season FROM player_stats ORDER BY season DESC")
+                )
+                if r[0] is not None
+            ]
+            if seasons:
+                latest_week = conn.execute(
+                    text("SELECT MAX(week) FROM player_stats WHERE season = :s"),
+                    {"s": seasons[0]},
+                ).scalar()
+    except Exception as exc:  # noqa: BLE001 - informational endpoint, never fatal
+        logger.warning("info_seasons_failed", error=str(exc))
 
     return {
         "environment": settings.environment,
@@ -111,6 +134,8 @@ def info() -> dict:
         "cache_backend": backend_name(),
         "active_model_version": settings.active_model_version,
         "ml_service_url": settings.ml_service_url,
+        "seasons_with_data": seasons,
+        "latest_week": int(latest_week) if latest_week is not None else None,
     }
 
 
