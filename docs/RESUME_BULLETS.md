@@ -1,131 +1,149 @@
-# Resume bullets — FantasyIQ
+# Resume bullets — FantasyIQ (software engineering roles)
 
-Every number below was measured on this repo. Sources are listed at the bottom so you can
-reproduce any of them before an interview. **Do not use a number you haven't re-run.**
+Written for general SWE and backend roles. The machine learning is present because it's
+differentiating, but it's framed as engineering — interfaces, dispatch, correctness,
+performance — because that's what a SWE screener is reading for.
+
+Every number was measured on this repo. Sources are at the bottom. **Do not use a number
+you haven't re-run.**
 
 ---
 
-## Recommended version (4 bullets)
+## Recommended — 4 bullets
 
-Use this if the project gets a normal amount of space. It covers backend, data, ML and
-infra in that order — which is the order a backend SWE screener cares about.
-
-> **FantasyIQ — NFL Fantasy Football Analytics Platform**
-> *Python, FastAPI, PostgreSQL, Redis, XGBoost, Docker, GitHub Actions, Prometheus*
+> **FantasyIQ — Full-Stack NFL Analytics Platform** · [github.com/uziahmed3/fantasyiq](https://github.com/uziahmed3/fantasyiq)
+> *Python, JavaScript, FastAPI, PostgreSQL, Redis, React, Docker, pytest, GitHub Actions*
 >
-> - Built a 3-service platform (REST API, ML inference service, ETL pipeline) exposing 14
->   versioned endpoints that serve season-long draft rankings and weekly start/sit
->   projections, backed by PostgreSQL with 30K+ player-week records across 5 NFL seasons.
-> - Designed a two-model architecture routing on data availability rather than calendar
->   date, so rookies and week-1 players are served by a preseason model instead of failing
->   for lack of recent form; enforced a shared feature contract across training and serving
->   to prevent skew, with artifacts rejected at load time on version mismatch.
-> - Implemented cache-aside caching with a pluggable Redis/in-memory backend, cutting
->   repeat prediction latency 92% (101ms → 8ms) by eliminating an inter-service HTTP call
->   and model inference per request.
-> - Containerized the stack with Docker Compose (API, ML service, Postgres, Redis,
->   Prometheus/Grafana) and set up 7-job GitHub Actions CI running 152 tests, linting,
->   image builds, and an integration job that applies migrations forward and backward
->   against real Postgres to catch schema drift.
+> - Built a 3-service application (REST API, inference service, ETL pipeline) with a React
+>   dashboard, exposing 14 versioned endpoints over a normalized PostgreSQL schema of 30K+
+>   records; designed idempotent upserts so re-runs are safe and an append-only prediction
+>   log so past outputs stay auditable.
+> - Designed a dispatch layer that selects between two prediction strategies at request
+>   time based on data availability, behind a single endpoint, plus a versioned interface
+>   contract validated at the service boundary — incompatible artifacts fail fast on load
+>   instead of silently returning wrong results.
+> - Cut repeat-request latency 92% (101ms → 8ms) with a cache-aside layer behind a
+>   pluggable Redis/in-memory interface, eliminating a cross-service HTTP call and model
+>   inference per request; the same abstraction lets the stack run with or without Redis.
+> - Wrote 152 tests and a 7-job CI pipeline (lint, 3 test suites, integration, image build,
+>   full-stack smoke test), including a migration forward/backward check that fails the
+>   build when the ORM and schema drift apart.
 
-## Compact version (3 bullets)
+## Optional 5th bullet — the debugging one
 
-When space is tight. Merges infra into the API bullet and keeps the two strongest claims.
+Add this if the project gets 5 lines. It's the most distinctive thing on the page, because
+almost no new-grad resume describes finding a bug that didn't throw an error.
 
-> - Built a 3-service NFL analytics platform (FastAPI, PostgreSQL, Redis, Docker) serving
->   14 REST endpoints over 30K+ player-week records, with 7-job CI running 152 tests on
->   every push.
-> - Architected dual prediction models routing on data availability, with a shared feature
->   contract preventing training/serving skew; improved holdout accuracy 30% over baseline
->   (RMSE 4.04 → 2.83) on a season fully withheld from training.
-> - Reduced repeat prediction latency 92% (101ms → 8ms) via cache-aside caching, and
->   diagnosed a systematic model bias using per-player SHAP attribution that global feature
->   importance could not surface.
+> - Diagnosed a silent correctness defect in production rankings — no exception, just wrong
+>   output — by building a per-feature attribution endpoint that decomposed each result into
+>   the inputs that produced it; the fix improved prediction accuracy 29.9% over baseline
+>   (RMSE 4.04 → 2.83).
 
-## If the role leans ML / data
+## Compact — 3 bullets
 
-Swap the third bullet for these two:
+> - Built a 3-service full-stack application (FastAPI, PostgreSQL, Redis, React, Docker)
+>   serving 14 versioned REST endpoints over a normalized 30K-record schema, with 152 tests
+>   and 7-job CI on every push.
+> - Designed request-time dispatch between two prediction strategies behind one endpoint,
+>   with a versioned interface contract validated at the service boundary so incompatible
+>   artifacts fail fast rather than silently returning wrong results.
+> - Cut repeat-request latency 92% (101ms → 8ms) via a cache-aside layer behind a pluggable
+>   backend interface, and diagnosed a silent correctness bug by building per-result
+>   attribution tooling.
 
-> - Engineered 31 preseason features including career production weighted by recency,
->   games played and an age curve, improving accuracy 29.9% over a carry-forward baseline
->   (RMSE 4.04 → 2.83, R² 0.67) using season-level holdout validation to prevent leakage.
-> - Identified and corrected a systematic ranking bias via per-player SHAP attribution —
->   the model penalized established players for draft position years after production made
->   it irrelevant — using monotonic constraints and evidence-weighted feature decay to fix
->   it while improving accuracy.
+## Ultra-compact — 2 bullets
 
-## If the role leans infra / DevOps
+When the project is one of five and space is tight.
 
-Swap the fourth bullet for:
-
-> - Containerized a 6-service stack with Docker Compose, instrumented it with Prometheus
->   metrics and provisioned Grafana dashboards, and built CI that boots the entire stack
->   and smoke-tests the API on every push; designed model artifacts to live on a mounted
->   volume so a bad model rolls back via environment variable without a rebuild.
+> - Built a 3-service full-stack NFL analytics platform (FastAPI, PostgreSQL, Redis, React,
+>   Docker) — 14 REST endpoints, 30K-record normalized schema, 152 tests, 7-job CI.
+> - Cut repeat-request latency 92% (101ms → 8ms) with a pluggable cache-aside layer, and
+>   improved prediction accuracy 29.9% over baseline after diagnosing a silent correctness
+>   bug with custom attribution tooling.
 
 ---
 
-## Why these are written the way they are
+## Why they're written this way
 
-**They lead with the system, not the model.** Nearly every new-grad resume says "trained a
-machine learning model to predict X." That reads as a course project. "Built a 3-service
-platform serving 14 versioned endpoints" reads as engineering, and for a backend role
-that's the difference.
+**The ML is framed as engineering.** "Two-model architecture" sounds like a data science
+project. "Request-time dispatch between two strategies behind one endpoint" is the same
+fact described as software design, and it's what a SWE interviewer is actually evaluating.
+Same for the feature contract: it's an interface validated at a boundary with fail-fast on
+mismatch, which is a correctness argument, not an ML one.
 
-**Every bullet names a decision, not just an activity.** "Used Redis for caching" is a
-tool list. "Cache-aside with a pluggable backend, cutting repeat latency 92% by
-eliminating an inter-service call" says you understood *why* and measured the result.
+**The bullets name decisions, not tools.** "Used Redis for caching" is a tool list.
+"Cache-aside behind a pluggable interface, cutting latency 92% by eliminating a
+cross-service call" says you knew why, chose a pattern, and measured the result. That's the
+difference between a bullet that survives follow-up and one that doesn't.
 
-**The ATS keywords are real.** Python, FastAPI, PostgreSQL, Redis, Docker, CI/CD, REST,
-XGBoost, Prometheus — all present, all things you actually did and can discuss.
-Keyword-stuffing tech you can't talk about is how people get destroyed in phone screens,
-which is exactly why Terraform and AWS were cut from this project rather than left in as
+**Correctness gets equal billing with features.** Idempotent upserts, an append-only audit
+log, fail-fast contract validation, and a migration drift check are all about *not being
+silently wrong*. Most new-grad resumes are entirely about things built and never about
+things kept correct — and senior engineers reading resumes notice that.
+
+**The keywords are all defensible.** Python, JavaScript, FastAPI, PostgreSQL, Redis, React,
+Docker, pytest, CI/CD, REST — every one is something you did and can discuss. That's the
+same reason Terraform and AWS were removed from the project entirely rather than kept as
 resume decoration.
 
-**Each bullet is a question you want to be asked:**
+**Each bullet invites a question you can answer:**
 
-| Bullet | The question it invites | Your answer lives in |
+| Bullet | The question it invites | Where your answer lives |
 |---|---|---|
-| 3-service platform | "Why not a monolith?" | Guide, Part 5 |
-| Two-model routing | "Why two models?" | Guide, Part 2 — this is your best material |
+| 3-service platform | "Why not one service?" | Guide, Part 5 |
+| Dispatch + contract | "Why two models?" | Guide, Part 2 — your best material |
 | Cache-aside 92% | "Why cache-aside, not write-through?" | `INTERVIEW.md`, Caching |
-| Docker / CI | "How would you deploy this?" | Treat it as a design question — see `INTERVIEW.md`, Docker |
+| Tests + CI | "What does your CI actually catch?" | `INTERVIEW.md`, CI/CD |
+| Attribution bug | "Walk me through it." | Guide, Part 4, story 1 |
+
+---
+
+## If a job description mentions ML
+
+Most SWE postings don't, and leading with ML for a SWE role works against you. But if the
+posting explicitly asks for it, swap bullet 2 for:
+
+> - Engineered 31 features including career production weighted by recency, games played
+>   and an age curve, improving accuracy 29.9% over a carry-forward baseline (RMSE 4.04 →
+>   2.83, R² 0.67) with season-level holdout validation to prevent leakage; applied
+>   monotonic constraints to eliminate a systematic ranking bias.
 
 ---
 
 ## What NOT to put on there
 
-These are the claims that would fall apart under one follow-up question:
+Each of these collapses under one follow-up question:
 
 - ❌ **"Deployed to production"**, **"serving live traffic"**, or any cloud provider name —
-  none of it is deployed anywhere. "Containerized with Docker Compose" is true and enough.
-  If a job description demands cloud experience, say what you'd do rather than what you did.
+  it isn't deployed anywhere. "Containerized with Docker Compose" is true and enough.
 - ❌ **Any user count, DAU, or adoption metric** — there are no users.
-- ❌ **"99.9% uptime"** — nothing has been running long enough to have uptime.
-- ❌ **"Improved model accuracy by 57%"** — that was the synthetic-data number that turned
-  out to be a bug in my generator. The real number is 29.9%.
-- ❌ **In-season model accuracy figures** — that artifact isn't currently trained in
-  `models/`. Retrain first if you want to cite it.
-- ❌ **"Scaled to X requests/sec"** — you have a Locust file but no load-test results
-  worth quoting. Run it if you want the number.
+- ❌ **"99.9% uptime"** — nothing has run long enough to have uptime.
+- ❌ **"Improved accuracy 57%"** — that was the synthetic-data figure that turned out to be
+  a bug in the generator. The real number is 29.9%.
+- ❌ **In-season model accuracy** — that artifact isn't currently trained in `models/`.
+  Retrain before citing it.
+- ❌ **"Handles X requests/sec"** — there's a Locust file but no load-test results worth
+  quoting. Run it if you want the number.
+- ❌ **"Agile", "collaborated with stakeholders", "cross-functional"** on a solo project.
+  Interviewers know what a personal project is; padding it reads as insecurity.
 
 ---
 
 ## Sources for every number
 
-Re-run these before an interview so the figures are ones you've personally seen.
+Re-run these before an interview so every figure is one you've personally seen.
 
 | Claim | How to verify |
 |---|---|
-| 30,710 player-week records, 5 seasons, 1,627 players | `SELECT COUNT(*) FROM player_stats;` — seasons 2021–2025 |
+| 30,710 records, 5 seasons, 1,627 players | `SELECT COUNT(*) FROM player_stats;` — seasons 2021–2025 |
 | 14 REST endpoints | `GET /docs` on the running API, or count routes under `/api/v1` |
 | 152 tests, 7 CI jobs | `pytest` in `backend/`, `ml-service/`, `pipeline/` (61 + 45 + 46); jobs in `.github/workflows/ci.yml` |
 | RMSE 4.04 → 2.83, +29.9%, R² 0.67 | `models/preseason_v1.json`, or rerun `python -m train.train_preseason` |
-| 101ms → 8ms, 92% | Repeat `POST /api/v1/predict` with an identical body; the response's `source` field flips to `cache`. Measured locally on SQLite with the in-memory backend — say "local benchmark" if pressed |
-| 31 / 10 features | `len(PRESEASON_FEATURE_ORDER)`, `len(FEATURE_ORDER)` in `ml-service/app/features.py` |
+| 101ms → 8ms, 92% | Repeat `POST /api/v1/predict` with an identical body; the response's `source` field flips to `cache`. Local single-client benchmark — say so if pressed |
+| 31 features / 2 strategies | `len(PRESEASON_FEATURE_ORDER)`, `len(FEATURE_ORDER)` in `ml-service/app/features.py` |
+| React dashboard | `frontend/src/` — Vite app, 4 components; plus a zero-build HTML dashboard served at `/app` |
 
-**On the latency number specifically:** the honest framing is that the cache-miss path
-makes an HTTP call to the ML service, runs inference, and writes a row; the hit path skips
-all three. That structural difference is what produces the gap, and it would hold on real
-infrastructure — but the absolute figures come from a local single-client benchmark, so
-present them as such rather than as production numbers.
+**On the latency number:** the cache-miss path makes an HTTP call to the ML service, runs
+inference, and writes a row; the hit path skips all three. That structural difference is
+what produces the gap and would hold anywhere — but the absolute figures come from a local
+single-client benchmark, so present them as such.
