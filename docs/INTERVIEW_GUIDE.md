@@ -497,23 +497,8 @@ walk through the code. Nobody who wrote nothing can do that.
 
 ---
 
-## Resume bullets, with the numbers backed
+## Resume bullets
 
-> Built a fantasy football analytics platform (FastAPI, PostgreSQL, Redis, Docker, AWS)
-> serving REST projections from versioned XGBoost models — season-long rankings for draft
-> decisions and weekly point projections for start/sit decisions — with a two-model
-> architecture that routes on data availability, so rookies and week-1 players are served
-> by a preseason model instead of failing for lack of recent form.
-
-> Engineered career-history features weighted by recency, games played and an age curve,
-> improving holdout accuracy 29.9% over a carry-forward baseline (RMSE 4.04 → 2.83) on a
-> season fully held out from training.
-
-> Diagnosed a systematic ranking error using per-player SHAP attribution — the model was
-> penalizing established players for draft position years after their production made it
-> irrelevant — and fixed it with an explicit evidence-weighted decay, improving accuracy
-> while removing the bias.
-
-> Built automated ingestion of five NFL seasons (30k+ weekly records) with schema-drift
-> detection, and a shared feature contract validated at both training and serving to
-> prevent skew; 152 tests across 8 CI jobs.
+Moved to **`RESUME_BULLETS.md`** — four-bullet and three-bullet versions, variants for
+ML-leaning and infra-leaning roles, the claims to avoid, and a table for reproducing every
+number before you cite it.
