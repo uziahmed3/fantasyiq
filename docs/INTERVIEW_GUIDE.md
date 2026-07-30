@@ -37,35 +37,51 @@ Two sentences is all it takes:
 That's enough. If they nod like they know it, skip straight to the problem. If they look
 blank, one more line lands it:
 
-> The draft is the part that matters. You pick your roster once, before the season starts,
-> and you're mostly stuck with it. So a bad pick in August costs you for four months.
+> You draft a roster before the season, and then every week you choose which of your
+> players to actually start, because you have more players than starting slots.
 
-## The problem it solves
+## The problem it solves — two decisions, not one
 
-The user is someone about to draft, sitting there with a list of players, trying to answer
-one question: **who should I take next?**
+This is the framing to lead with, because the architecture falls straight out of it. A
+fantasy player makes exactly two kinds of decision, and they are genuinely different
+problems:
 
-That's harder than it sounds, and the reasons are what make this an engineering problem
-rather than a spreadsheet:
+**1. Draft day, once a year — "who do I take?"**
+You pick your roster in August and you're mostly stuck with it, so a bad pick costs you
+for four months. Nobody has played a game yet.
 
-- **Last season lies.** The obvious approach is to rank everyone by what they scored last
+**2. Every week of the season — "who do I start and who do I bench?"**
+You have, say, five receivers and can only start three. Every week you pick. Now you *do*
+have current-season data — you can see who's been getting the ball lately.
+
+The app does both. It opens as a **draft board** before the season — every skill-position
+player ranked, with a value score comparable across positions — and becomes a **weekly
+start/sit tool** once real games exist, projecting each player's points for the upcoming
+week against that week's opponent.
+
+**The switch is automatic.** It routes on whether the player has games yet, not on the
+calendar. That detail matters more than it sounds: week 1 for a veteran, and week 6 for
+someone just back from injury, are the same problem — no recent form to read. A
+date-based rule gets that wrong.
+
+### Why either one is hard
+
+- **Last season lies.** The obvious draft approach is to rank by what everyone scored last
   year. But one injury or one down year buries a genuinely great player. Justin Jefferson
   scored 19.5, 21.5, 20.4, 18.6, then 11.9 — ranking on that last number puts him 40th.
   He's not the 40th best receiver.
 - **Rookies have no data at all.** Every year a chunk of the draft pool has never played
-  an NFL game. Any system built purely on prior stats has nothing to say about them, and
-  those are often the picks people most want help with.
+  an NFL game, and those are often the picks people most want help with.
+- **Week to week is noisy.** A receiver can score 4 points and then 28 with no change in
+  his role, because one ball happened to reach the end zone. That's why the weekly model
+  carries volume — targets, receptions, yards over the last three games — alongside points
+  rather than points alone. Volume is what actually persists; touchdowns are close to
+  coin-flips at this sample size.
 - **Points aren't comparable across positions.** A 15-point tight end is worth more than
   a 15-point running back, because the *next best available* tight end is so much worse.
-  Raw projections don't answer "who do I take", only "who scores more".
-- **A number with no reason behind it is useless.** If the tool says take player A over
+  Raw projections answer "who scores more", not "who do I take".
+- **A number with no reason behind it is useless.** If the tool says start player A over
   player B and won't say why, nobody trusts it — and they shouldn't.
-
-So the app is a **draft board**: every skill-position player ranked for the upcoming
-season, with a projection, a value score that's comparable across positions, and a
-per-player breakdown of what's driving the number. Once the season starts it switches to
-weekly projections for start/sit decisions — automatically, based on whether real games
-exist yet, not on a date.
 
 ## Why it's worth building as a system
 
@@ -97,27 +113,34 @@ everything. You are trying to leave three or four hooks they'll want to pull on.
 
 ### The script
 
-> *(domain)* It's a fantasy football draft tool. In fantasy football you pick real NFL
-> players and score points based on what they do in real games, so picking well is a
-> prediction problem.
+> *(domain)* It's a fantasy football projection platform. In fantasy football you draft
+> real NFL players and score points based on what they actually do in real games.
 >
-> *(problem)* The naive approach is to rank players by what they scored last season, but
-> that breaks in obvious ways — one injury year buries a great player, and rookies have no
-> data at all. So I wanted something that used a player's whole career and could still say
-> something useful about someone who'd never played a down.
+> *(problem)* There are two decisions you make. In August you draft a roster, and then
+> every week you decide which of your players to start, because you have more players than
+> starting slots. So the app does both — it's a draft board before the season, and a
+> weekly start/sit tool once the season begins.
 >
 > *(what you built)* It's three services. A pipeline that ingests five seasons of NFL data
 > into Postgres — about 30,000 weekly stat lines — a FastAPI backend that serves
 > projections over a REST API with Redis caching, and a separate ML service that loads
 > versioned XGBoost models off disk. Runs on Docker Compose locally, Terraform for AWS.
 >
-> *(the interesting thing)* The part I found most interesting is that it's actually two
-> different prediction problems. During the season you have recent form — what did he do
-> the last three games. But in August that doesn't exist, and for a rookie it never
-> exists. So there are two models behind one endpoint, and the router picks based on
-> whether the player has games yet rather than what week it is.
+> *(the interesting thing)* Those two decisions turn out to be genuinely different
+> prediction problems. Week to week you have recent form — what did he do the last three
+> games, who's he playing. In August none of that exists, and for a rookie it never
+> exists, so you're working from career history, draft position and where he sits on the
+> depth chart. Different features, different targets. So it's two models behind one
+> endpoint, and the router picks based on whether the player has games yet rather than
+> what week it is — because week 1 for a veteran and week 6 for someone back from injury
+> are actually the same problem.
 
 Then **stop**. The silence is doing work — it hands them the wheel.
+
+**Why this version is better than leading with the draft board.** "Two decisions, so two
+models" makes the architecture sound like it followed the product, which is what good
+design looks like. Leading with only the draft board makes the second model sound like an
+afterthought you bolted on.
 
 ### The hooks you just planted
 
@@ -130,6 +153,7 @@ Each of these is something they can pull, and you have a real answer for all of 
 | "How do you handle rookies?" | Draft capital and depth-chart position — the only real signal in August — and the decay story |
 | "What was hard?" | The Nacua bug. This is the one you want. |
 | "Why XGBoost?" | Tabular data, small dataset, and it supports monotonic constraints, which I needed |
+| "How does the weekly one work?" | 10 features: 3-game rolling targets/receptions/yards/TDs/points, last game, season average, games played, opponent rank, home/away |
 | "Is it deployed?" | Written and validated in CI, not continuously running. Say it plainly. |
 
 If they ask an open "what was the hardest part" — **always go to the Nacua bug**. It's the
@@ -138,10 +162,10 @@ strongest thing you have.
 ### Reading the room
 
 **Recruiter or non-technical screen.** Stop after the problem and one sentence on what you
-built. Say "fantasy football draft tool that predicts how players will do, built as a
-full-stack app with a machine learning model behind it." Don't say Postgres. They're
-checking it's real and that you can explain things to normal people — the second part is
-actually the test.
+built. Say "fantasy football app that predicts how many points a player will score — so
+it helps you draft, and then helps you pick who to start each week. Full-stack, with a
+machine learning model behind it." Don't say Postgres. They're checking it's real and that
+you can explain things to normal people — the second part is actually the test.
 
 **Engineer or technical screen.** Full script. Lead with the architecture, keep the domain
 to one sentence, and get to the two-model routing fast — that's the part that reads as
@@ -194,6 +218,30 @@ here — the artifact currently in `models/` is the preseason one. Retrain and r
 numbers before you quote any. Saying "the in-season path is built and tested but I've only
 validated it on backfilled data, never on a live week" is a *good* answer. Quoting a
 number you didn't measure is the one thing that ends an interview badly.
+
+### The two paths through the system
+
+Worth drawing separately, because they have different performance characteristics and
+interviewers like the distinction:
+
+```
+DRAFT BOARD (preseason)              START/SIT (in-season)
+one batch job, offseason             batch job, every week
+    |                                    |
+career history, draft capital,       last 3 games, opponent rank,
+depth chart, team situation          home/away, season average
+    |                                    |
+preseason model (31 features)        in-season model (10 features)
+    |                                    |
+predictions @ week 0 ------------> predictions @ week N
+    |                                    |
+    +----------- both read by ------------+
+                GET /rankings
+```
+
+Both write to the same append-only `predictions` table; week 0 is a sentinel meaning "the
+season as a whole". That's why one leaderboard endpoint serves both, and why comparing a
+projection to what actually happened works identically for either model.
 
 ### Request flow, the thing you'll be asked to draw
 
@@ -452,9 +500,10 @@ walk through the code. Nobody who wrote nothing can do that.
 ## Resume bullets, with the numbers backed
 
 > Built a fantasy football analytics platform (FastAPI, PostgreSQL, Redis, Docker, AWS)
-> serving REST projections from versioned XGBoost models, with a two-model architecture
-> routing on data availability so rookies and week-1 players are handled by a separate
-> preseason model.
+> serving REST projections from versioned XGBoost models — season-long rankings for draft
+> decisions and weekly point projections for start/sit decisions — with a two-model
+> architecture that routes on data availability, so rookies and week-1 players are served
+> by a preseason model instead of failing for lack of recent form.
 
 > Engineered career-history features weighted by recency, games played and an age curve,
 > improving holdout accuracy 29.9% over a carry-forward baseline (RMSE 4.04 → 2.83) on a
