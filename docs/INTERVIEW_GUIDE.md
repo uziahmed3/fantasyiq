@@ -7,36 +7,167 @@ and how to handle the hard questions honestly.
 Every number here was measured, not estimated. If you cannot reproduce a number live, do
 not say it.
 
----
+**If you only read one thing before an interview, read Part 2** — the script for "tell me
+about your project", which you will be asked every single time.
 
-## The 30-second version
-
-> It's a fantasy football projection platform. A pipeline ingests five seasons of NFL
-> play data into Postgres, a FastAPI service exposes projections over a REST API, and a
-> separate ML service serves the models. The interesting part isn't the model — it's that
-> the whole thing is a system: versioned model artifacts you can roll back with an
-> environment variable, a feature contract shared between training and serving so they
-> can't drift, and per-player explanations so the projections aren't a black box.
-
-Stop there. Let them pick what to dig into. The most common follow-up is "why two
-services", and you have a real answer (below).
-
-## The 2-minute version
-
-Add the shape of the problem, because it's what makes the design non-obvious:
-
-> There are actually two different prediction problems. During the season you have
-> rolling form — what did he do the last three games. But in August that data doesn't
-> exist, and for a rookie it never exists. Those need different features and a different
-> target, so they're two models behind one endpoint. The router picks based on whether
-> the player has games yet, not on what week it is — because week 1 for a veteran and
-> week 6 for someone returning from injury are the same problem.
-
-That paragraph does a lot of work. It shows you found a real modeling distinction rather
-than fitting one model to everything, and "route on data availability, not the calendar"
-is a design instinct that generalizes.
+1. [What the project actually is](#part-1--what-the-project-actually-is) — the domain and
+   the problem, in language a non-player understands
+2. [**"So, tell me about your project"**](#part-2--so-tell-me-about-your-project) — the
+   script, the follow-up hooks, and how to adjust by audience
+3. [The system in detail](#part-3--the-system-in-detail) — measured facts, request flow
+4. [The five stories](#part-4--the-five-stories) — specifics that win interviews
+5. [Defending the decisions](#part-5--defending-the-decisions) — tradeoffs and limitations
+6. [Q&A, prep, and bullets](#part-6--qa-prep-and-bullets)
 
 ---
+
+# Part 1 — What the project actually is
+
+## The domain, for someone who has never played
+
+Do not assume the interviewer knows fantasy football. Plenty of engineers don't, and if
+you open with "target share" and "PPR scoring" you lose them in the first ten seconds.
+Two sentences is all it takes:
+
+> In fantasy football you draft real NFL players onto an imaginary team, and they score
+> you points based on what they actually do in real games that week — catches, yards,
+> touchdowns. So the whole game is a prediction problem: you're trying to pick the players
+> who will score the most over the season.
+
+That's enough. If they nod like they know it, skip straight to the problem. If they look
+blank, one more line lands it:
+
+> The draft is the part that matters. You pick your roster once, before the season starts,
+> and you're mostly stuck with it. So a bad pick in August costs you for four months.
+
+## The problem it solves
+
+The user is someone about to draft, sitting there with a list of players, trying to answer
+one question: **who should I take next?**
+
+That's harder than it sounds, and the reasons are what make this an engineering problem
+rather than a spreadsheet:
+
+- **Last season lies.** The obvious approach is to rank everyone by what they scored last
+  year. But one injury or one down year buries a genuinely great player. Justin Jefferson
+  scored 19.5, 21.5, 20.4, 18.6, then 11.9 — ranking on that last number puts him 40th.
+  He's not the 40th best receiver.
+- **Rookies have no data at all.** Every year a chunk of the draft pool has never played
+  an NFL game. Any system built purely on prior stats has nothing to say about them, and
+  those are often the picks people most want help with.
+- **Points aren't comparable across positions.** A 15-point tight end is worth more than
+  a 15-point running back, because the *next best available* tight end is so much worse.
+  Raw projections don't answer "who do I take", only "who scores more".
+- **A number with no reason behind it is useless.** If the tool says take player A over
+  player B and won't say why, nobody trusts it — and they shouldn't.
+
+So the app is a **draft board**: every skill-position player ranked for the upcoming
+season, with a projection, a value score that's comparable across positions, and a
+per-player breakdown of what's driving the number. Once the season starts it switches to
+weekly projections for start/sit decisions — automatically, based on whether real games
+exist yet, not on a date.
+
+## Why it's worth building as a system
+
+The honest framing, and it plays well: **the model is the small part.** Predicting fantasy
+points is a regression problem you could prototype in a notebook in an afternoon. What
+makes it a real project is everything around it:
+
+- Data has to arrive automatically and survive the source changing its schema on you.
+- The model has to be *served* — versioned, rollback-able, behind an API, with the same
+  feature code at training and serving time or it silently drifts.
+- Projections have to be fast enough to page through, which means precomputing in batch
+  rather than calling a model per row.
+- It has to explain itself, or nobody uses it.
+
+That's the sentence to have ready: *"the part I'd defend in a code review isn't the model,
+it's the system around it."*
+
+---
+
+# Part 2 — "So, tell me about your project"
+
+You will get this every single time. It's the most rehearsable question in the interview
+and most people waste it by either rambling for four minutes or giving a one-line answer
+that kills the conversation.
+
+**The shape that works:** domain → problem → what you built → the one interesting thing.
+Sixty to ninety seconds, then stop and let them steer. You are not trying to say
+everything. You are trying to leave three or four hooks they'll want to pull on.
+
+### The script
+
+> *(domain)* It's a fantasy football draft tool. In fantasy football you pick real NFL
+> players and score points based on what they do in real games, so picking well is a
+> prediction problem.
+>
+> *(problem)* The naive approach is to rank players by what they scored last season, but
+> that breaks in obvious ways — one injury year buries a great player, and rookies have no
+> data at all. So I wanted something that used a player's whole career and could still say
+> something useful about someone who'd never played a down.
+>
+> *(what you built)* It's three services. A pipeline that ingests five seasons of NFL data
+> into Postgres — about 30,000 weekly stat lines — a FastAPI backend that serves
+> projections over a REST API with Redis caching, and a separate ML service that loads
+> versioned XGBoost models off disk. Runs on Docker Compose locally, Terraform for AWS.
+>
+> *(the interesting thing)* The part I found most interesting is that it's actually two
+> different prediction problems. During the season you have recent form — what did he do
+> the last three games. But in August that doesn't exist, and for a rookie it never
+> exists. So there are two models behind one endpoint, and the router picks based on
+> whether the player has games yet rather than what week it is.
+
+Then **stop**. The silence is doing work — it hands them the wheel.
+
+### The hooks you just planted
+
+Each of these is something they can pull, and you have a real answer for all of them:
+
+| If they ask… | Go to |
+|---|---|
+| "Why two services?" | Different scaling signals, independent deploys, model rollback without an API deploy — *and* the honest caveat that a monolith would be fine at this traffic |
+| "How accurate is it?" | 29.9% better than carry-forward on a fully held-out season, RMSE 4.04 → 2.83 |
+| "How do you handle rookies?" | Draft capital and depth-chart position — the only real signal in August — and the decay story |
+| "What was hard?" | The Nacua bug. This is the one you want. |
+| "Why XGBoost?" | Tabular data, small dataset, and it supports monotonic constraints, which I needed |
+| "Is it deployed?" | Written and validated in CI, not continuously running. Say it plainly. |
+
+If they ask an open "what was the hardest part" — **always go to the Nacua bug**. It's the
+strongest thing you have.
+
+### Reading the room
+
+**Recruiter or non-technical screen.** Stop after the problem and one sentence on what you
+built. Say "fantasy football draft tool that predicts how players will do, built as a
+full-stack app with a machine learning model behind it." Don't say Postgres. They're
+checking it's real and that you can explain things to normal people — the second part is
+actually the test.
+
+**Engineer or technical screen.** Full script. Lead with the architecture, keep the domain
+to one sentence, and get to the two-model routing fast — that's the part that reads as
+design thinking rather than tutorial-following.
+
+**Hiring manager.** Emphasize *why* over *what*. The interesting version for them is that
+you changed the model's target once you understood how it would actually be used: the
+original predicted the first four weeks of the season, which was wrong for a draft board,
+because someone drafting is buying a whole season, not September. Changing the target to
+the full regular season was the single biggest accuracy improvement in the project — RMSE
+3.56 → 2.89. That's a story about understanding the user, and it's rare in a new grad.
+
+### Two things not to do
+
+**Don't lead with the ML.** Every new grad project leads with "I trained a model." Leading
+with the system is what differentiates you for a backend role, and it's also just true
+here — the model is a few hundred lines and the system is ten thousand.
+
+**Don't oversell it as production.** "It's deployed on AWS serving live traffic" is a claim
+you cannot back up and it takes about one follow-up question to unravel. "The infra is
+written in Terraform and validates in CI; I've run the whole stack locally on Docker
+Compose" is honest, still impressive, and unfalsifiable because it's true.
+
+---
+
+# Part 3 — The system in detail
 
 ## What actually exists
 
@@ -87,7 +218,8 @@ your own latency budget.
 
 ---
 
-## The five stories
+# Part 4 — The five stories
+
 
 Interviews are won on specifics. Each of these is a real thing that happened, with a
 number attached. Pick the one that fits the question rather than reciting all five.
@@ -199,6 +331,8 @@ evaluation, not a win. I now distrust my own metrics first.
 
 ---
 
+# Part 5 — Defending the decisions
+
 ## Design decisions you must be able to defend
 
 Do not memorize these. Understand the tradeoff, because they'll push on it.
@@ -264,6 +398,8 @@ opposite. Any of these is a good answer to "what would you do next".
   you don't have is the fastest way to lose the room.
 
 ---
+
+# Part 6 — Q&A, prep, and bullets
 
 ## Questions you should expect
 
