@@ -3,6 +3,9 @@
 For each component: why it exists, and the questions that follow. Answers are pointers to
 real code in this repo, because "let me show you the file" beats a rehearsed paragraph.
 
+> This is the component-level drill. For how to open, the stories worth telling, and the
+> honest limitations, see **`INTERVIEW_GUIDE.md`**.
+
 ---
 
 ## Backend API
@@ -115,7 +118,30 @@ there is no rebuild and no retrain. Old versions stay on disk precisely for this
 
 **"Why not random train/test split?"**
 Because the task is forecasting. A random split lets week 12 leak into training and
-inflates the score. `time_split()` holds out the last four weeks.
+inflates the score. `time_split()` holds out the last four weeks for the in-season model;
+the preseason model holds out the most recent season *entirely*, since predicting a season
+you trained on says nothing about next August.
+
+**"Why two models behind one endpoint?"**
+They are different problems. In-season asks "given his last three games, what happens next
+week"; preseason asks "given his career, role and situation, what does he average this
+season". Different features, different targets. `choose_mode()` routes on whether the
+player has games yet — data availability, not the calendar, so week 1 for a veteran and a
+mid-season return from injury are handled the same way.
+
+**"Your model ranked a player below someone he beat on every stat. What happened?"**
+Two causes, both real. Trees cannot extrapolate past the top of their training range, so
+above ~20 points per game the production splits stopped separating anyone and secondary
+features decided the elite tier — fixed with `monotone_constraints`, so more production can
+never lower a projection. And draft capital was being applied to everyone, not just players
+without a record; it now decays to league-average over 32 games. RMSE 2.886 → 2.835. Full
+write-up in `INTERVIEW_GUIDE.md`.
+
+**"How do you explain an individual projection?"**
+`POST /predict/preseason/explain` returns per-feature contributions via tree SHAP, which
+sum exactly to that player's prediction. Surfaced at `GET /rankings/season/{id}/why`. Global
+feature importance could not have found the draft-capital bug — it is identical for every
+player. Only per-player attribution could.
 
 **"Is `confidence` a probability?"**
 No, and it does not claim to be. It combines validation residual spread with how much
