@@ -7,7 +7,7 @@ Design notes:
 
 Two backends behind one interface:
 
-  redis://...    Redis / ElastiCache. What production runs.
+  redis://...    Redis. What a deployed environment would run.
   memory://      Process-local TTL dict. What `run-local.ps1` uses when there is no
                  Docker to run Redis in.
 

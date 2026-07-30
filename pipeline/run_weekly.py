@@ -4,7 +4,7 @@
 
 Each stage is importable and independently runnable, so a failure at "load" is retried
 from "load" rather than re-downloading the whole season. Exit code is non-zero on
-failure so the scheduler (or Airflow, or an ECS scheduled task) can alert on it.
+failure so the scheduler (or Airflow, or any cron runner) can alert on it.
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ def _bust_prediction_cache() -> int:
     if not url or url.startswith("memory://"):
         # Local no-Docker mode: the API's cache lives in the API process, so a separate
         # pipeline process cannot reach it. Entries age out via TTL instead. Not a
-        # problem worth solving - with a shared Redis (Docker/AWS) this branch is dead.
+        # problem worth solving - with a shared Redis this branch is dead.
         log.info("cache_bust_skipped", reason="in-process cache; entries expire by TTL")
         return 0
     try:

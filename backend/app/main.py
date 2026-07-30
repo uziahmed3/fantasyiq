@@ -118,7 +118,7 @@ def health() -> dict:
 @app.get("/info", tags=["ops"], summary="What this instance is actually running")
 def info() -> dict:
     """Handy when the same code runs on SQLite+memory-cache locally and
-    Postgres+ElastiCache in AWS - one call says which.
+    Postgres+Redis when deployed - one call says which.
 
     Also reports which seasons and weeks actually hold data, so the dashboard can
     default its selectors to something populated instead of to today's calendar year.

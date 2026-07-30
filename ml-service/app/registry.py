@@ -1,6 +1,6 @@
 """Model registry: versioned artifacts on disk, loaded lazily and cached in-process.
 
-Layout (MODEL_DIR, an EFS mount in AWS / a docker volume locally):
+Layout (MODEL_DIR, a docker volume locally / any shared mount when deployed):
     /models/xgboost_v1.joblib
     /models/xgboost_v1.json        <- metadata: framework, feature order, metrics
     /models/torch_v1.pt

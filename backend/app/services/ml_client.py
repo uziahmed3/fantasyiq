@@ -5,9 +5,9 @@ bad model rollout can be reverted without redeploying the API. The cost of that 
 a network hop, so this client owns the timeout/retry/failure semantics.
 
 Note on `trust_env=False`: httpx reads HTTP_PROXY / HTTPS_PROXY / ALL_PROXY from the
-environment by default. This call is always internal - localhost in local mode, private
-VPC DNS in AWS - so routing it through an outbound proxy is never correct and, on a
-corporate machine that sets those variables, breaks the API outright. Disabling env
+environment by default. This call is always internal - localhost in local mode, a private
+service name under Docker - so routing it through an outbound proxy is never correct and,
+on a corporate machine that sets those variables, breaks the API outright. Disabling env
 trust here is the fix; external calls (which this service does not make) would opt in.
 """
 

@@ -94,7 +94,7 @@ def _add_opponent_rank(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_from_db(positions: str | None = None) -> pd.DataFrame:
-    """Postgres in Docker/AWS, SQLite in local no-Docker mode - same SQL either way.
+    """Postgres in Docker, SQLite in local no-Docker mode - same SQL either way.
 
     The position filter is applied in pandas rather than SQL because the Postgres
     idiom for it (`= ANY(string_to_array(...))`) has no SQLite equivalent, and the

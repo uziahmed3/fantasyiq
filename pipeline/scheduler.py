@@ -1,8 +1,8 @@
 """Minimal in-container scheduler for local development.
 
-Deliberately dumb: sleep until the next target time, run the job, log the outcome. In AWS
-this process is replaced by an EventBridge rule firing an ECS scheduled task (see
-infra/terraform/pipeline.tf) so there is no long-lived container to babysit; the Airflow
+Deliberately dumb: sleep until the next target time, run the job, log the outcome. A real
+deployment would replace this with whatever the platform already offers - cron, a systemd
+timer, a scheduled container - so there is no long-lived process to babysit; the Airflow
 DAG in dags/ is the alternative if the pipeline grows more than a handful of stages.
 """
 

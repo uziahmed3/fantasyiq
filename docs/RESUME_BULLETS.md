@@ -11,7 +11,7 @@ Use this if the project gets a normal amount of space. It covers backend, data, 
 infra in that order — which is the order a backend SWE screener cares about.
 
 > **FantasyIQ — NFL Fantasy Football Analytics Platform**
-> *Python, FastAPI, PostgreSQL, Redis, XGBoost, Docker, Terraform, AWS, GitHub Actions*
+> *Python, FastAPI, PostgreSQL, Redis, XGBoost, Docker, GitHub Actions, Prometheus*
 >
 > - Built a 3-service platform (REST API, ML inference service, ETL pipeline) exposing 14
 >   versioned endpoints that serve season-long draft rankings and weekly start/sit
@@ -23,17 +23,18 @@ infra in that order — which is the order a backend SWE screener cares about.
 > - Implemented cache-aside caching with a pluggable Redis/in-memory backend, cutting
 >   repeat prediction latency 92% (101ms → 8ms) by eliminating an inter-service HTTP call
 >   and model inference per request.
-> - Containerized with Docker Compose and provisioned AWS infrastructure via Terraform (79
->   resources: ECS Fargate, RDS, ElastiCache, ALB, CloudFront), with 8-job CI running 152
->   tests, linting, Terraform validation and image builds on every push.
+> - Containerized the stack with Docker Compose (API, ML service, Postgres, Redis,
+>   Prometheus/Grafana) and set up 7-job GitHub Actions CI running 152 tests, linting,
+>   image builds, and an integration job that applies migrations forward and backward
+>   against real Postgres to catch schema drift.
 
 ## Compact version (3 bullets)
 
 When space is tight. Merges infra into the API bullet and keeps the two strongest claims.
 
-> - Built and deployed a 3-service NFL analytics platform (FastAPI, PostgreSQL, Redis,
->   Docker, Terraform/AWS) serving 14 REST endpoints over 30K+ player-week records, with
->   8-job CI running 152 tests on every push.
+> - Built a 3-service NFL analytics platform (FastAPI, PostgreSQL, Redis, Docker) serving
+>   14 REST endpoints over 30K+ player-week records, with 7-job CI running 152 tests on
+>   every push.
 > - Architected dual prediction models routing on data availability, with a shared feature
 >   contract preventing training/serving skew; improved holdout accuracy 30% over baseline
 >   (RMSE 4.04 → 2.83) on a season fully withheld from training.
@@ -57,10 +58,10 @@ Swap the third bullet for these two:
 
 Swap the fourth bullet for:
 
-> - Provisioned a 3-tier AWS environment in Terraform (79 resources: VPC, ECS Fargate, RDS,
->   ElastiCache, ALB, CloudFront, Secrets Manager) with secrets generated at apply time and
->   CI authenticating via OIDC rather than long-lived keys; instrumented with Prometheus
->   metrics and Grafana dashboards.
+> - Containerized a 6-service stack with Docker Compose, instrumented it with Prometheus
+>   metrics and provisioned Grafana dashboards, and built CI that boots the entire stack
+>   and smoke-tests the API on every push; designed model artifacts to live on a mounted
+>   volume so a bad model rolls back via environment variable without a rebuild.
 
 ---
 
@@ -75,9 +76,11 @@ that's the difference.
 tool list. "Cache-aside with a pluggable backend, cutting repeat latency 92% by
 eliminating an inter-service call" says you understood *why* and measured the result.
 
-**The ATS keywords are real.** Python, FastAPI, PostgreSQL, Redis, Docker, Terraform, AWS,
-ECS, RDS, CI/CD, REST, XGBoost — all present, all things you actually did. Keyword-stuffing
-tech you can't discuss is how people get destroyed in phone screens.
+**The ATS keywords are real.** Python, FastAPI, PostgreSQL, Redis, Docker, CI/CD, REST,
+XGBoost, Prometheus — all present, all things you actually did and can discuss.
+Keyword-stuffing tech you can't talk about is how people get destroyed in phone screens,
+which is exactly why Terraform and AWS were cut from this project rather than left in as
+resume decoration.
 
 **Each bullet is a question you want to be asked:**
 
@@ -86,7 +89,7 @@ tech you can't discuss is how people get destroyed in phone screens.
 | 3-service platform | "Why not a monolith?" | Guide, Part 5 |
 | Two-model routing | "Why two models?" | Guide, Part 2 — this is your best material |
 | Cache-aside 92% | "Why cache-aside, not write-through?" | `INTERVIEW.md`, Caching |
-| Terraform / CI | "Is it actually deployed?" | Answer honestly: validated in CI, not running |
+| Docker / CI | "How would you deploy this?" | Treat it as a design question — see `INTERVIEW.md`, Docker |
 
 ---
 
@@ -94,8 +97,9 @@ tech you can't discuss is how people get destroyed in phone screens.
 
 These are the claims that would fall apart under one follow-up question:
 
-- ❌ **"Deployed to production"** or **"serving live traffic"** — it isn't. Say
-  "provisioned via Terraform" and "runs on Docker Compose locally", both true.
+- ❌ **"Deployed to production"**, **"serving live traffic"**, or any cloud provider name —
+  none of it is deployed anywhere. "Containerized with Docker Compose" is true and enough.
+  If a job description demands cloud experience, say what you'd do rather than what you did.
 - ❌ **Any user count, DAU, or adoption metric** — there are no users.
 - ❌ **"99.9% uptime"** — nothing has been running long enough to have uptime.
 - ❌ **"Improved model accuracy by 57%"** — that was the synthetic-data number that turned
@@ -115,8 +119,7 @@ Re-run these before an interview so the figures are ones you've personally seen.
 |---|---|
 | 30,710 player-week records, 5 seasons, 1,627 players | `SELECT COUNT(*) FROM player_stats;` — seasons 2021–2025 |
 | 14 REST endpoints | `GET /docs` on the running API, or count routes under `/api/v1` |
-| 152 tests, 8 CI jobs | `pytest` in `backend/`, `ml-service/`, `pipeline/` (61 + 45 + 46); jobs in `.github/workflows/ci.yml` |
-| 79 Terraform resources | `grep -h '^resource' infra/terraform/*.tf \| wc -l` |
+| 152 tests, 7 CI jobs | `pytest` in `backend/`, `ml-service/`, `pipeline/` (61 + 45 + 46); jobs in `.github/workflows/ci.yml` |
 | RMSE 4.04 → 2.83, +29.9%, R² 0.67 | `models/preseason_v1.json`, or rerun `python -m train.train_preseason` |
 | 101ms → 8ms, 92% | Repeat `POST /api/v1/predict` with an identical body; the response's `source` field flips to `cache`. Measured locally on SQLite with the in-memory backend — say "local benchmark" if pressed |
 | 31 / 10 features | `len(PRESEASON_FEATURE_ORDER)`, `len(FEATURE_ORDER)` in `ml-service/app/features.py` |

@@ -129,21 +129,6 @@ jobs:
           fi
           rm alembic/versions/drift_drift_check.py
 
-  terraform:
-    name: Terraform validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.8
-      - name: fmt
-        run: terraform -chdir=infra/terraform fmt -check -recursive
-      - name: validate
-        run: |
-          terraform -chdir=infra/terraform init -backend=false
-          terraform -chdir=infra/terraform validate
-
   docker-build:
     name: Docker build
     runs-on: ubuntu-latest

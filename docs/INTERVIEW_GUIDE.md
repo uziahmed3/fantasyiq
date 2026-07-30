@@ -124,7 +124,7 @@ everything. You are trying to leave three or four hooks they'll want to pull on.
 > *(what you built)* It's three services. A pipeline that ingests five seasons of NFL data
 > into Postgres — about 30,000 weekly stat lines — a FastAPI backend that serves
 > projections over a REST API with Redis caching, and a separate ML service that loads
-> versioned XGBoost models off disk. Runs on Docker Compose locally, Terraform for AWS.
+> versioned XGBoost models off disk. The whole thing runs on Docker Compose.
 >
 > *(the interesting thing)* Those two decisions turn out to be genuinely different
 > prediction problems. Week to week you have recent form — what did he do the last three
@@ -184,10 +184,12 @@ the full regular season was the single biggest accuracy improvement in the proje
 with the system is what differentiates you for a backend role, and it's also just true
 here — the model is a few hundred lines and the system is ten thousand.
 
-**Don't oversell it as production.** "It's deployed on AWS serving live traffic" is a claim
-you cannot back up and it takes about one follow-up question to unravel. "The infra is
-written in Terraform and validates in CI; I've run the whole stack locally on Docker
-Compose" is honest, still impressive, and unfalsifiable because it's true.
+**Don't oversell it as production.** "It's deployed and serving live traffic" is a claim you
+cannot back up and it takes about one follow-up question to unravel. "It runs on Docker
+Compose and CI boots the full stack and exercises the API on every push" is honest, still
+impressive, and unfalsifiable because it's true. If they ask how you'd deploy it, answer as
+a design question — you have opinions about scaling the API on request count and the ML
+service on CPU, and framing it as a plan rather than a claim is the correct move.
 
 ---
 
@@ -204,8 +206,7 @@ Measured on the repo as of the last commit:
 | API | 14 REST endpoints, versioned under `/api/v1` |
 | Data | 30,710 weekly stat rows, 1,627 players, 2021–2025 |
 | Migrations | 6 Alembic revisions |
-| Infra | 79 Terraform resources across 12 `.tf` files |
-| CI | 8 jobs — lint, 3 test suites, integration, terraform validate, docker build, compose smoke |
+| CI | 7 jobs — lint, 3 test suites, integration, docker build, compose smoke |
 | Services | Postgres, Redis, ML service, API, pipeline, frontend, Prometheus, Grafana |
 
 **Preseason model** (`preseason_v1`, XGBoost, 31 features): trained on 2022–2024, held out
@@ -439,11 +440,12 @@ opposite. Any of these is a good answer to "what would you do next".
   residual spread and how much history a player has. Conformal prediction intervals are
   the real fix.
 - **The in-season path has never run on a live week.** Validated on backfilled data only.
-- **Single-region, no blue/green.** ECS rolling deploys with health checks; a bad model is
-  rolled back by env var, but a bad *image* is a redeploy.
-- **AWS infra is written and validated, not continuously running** — say this plainly if
-  asked whether it's deployed. `terraform validate` runs in CI. Claiming production uptime
-  you don't have is the fastest way to lose the room.
+- **It is not deployed anywhere.** It runs on Docker Compose, and CI boots the full stack
+  on every push. Say that plainly if asked — claiming production uptime you don't have is
+  the fastest way to lose the room. "How would you deploy it" is a fair question and you
+  should have an answer; "it is deployed" is a claim you'd have to walk back.
+- **Model rollback is solved, image rollback isn't.** A bad model is an env var and a
+  restart because artifacts are versioned on a volume. A bad build is a manual redeploy.
 
 ---
 
