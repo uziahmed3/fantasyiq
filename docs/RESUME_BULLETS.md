@@ -65,26 +65,30 @@ finding a bug that never threw an error.
 >   result into the feature contributions that produced it; corrected the bias with
 >   monotonic constraints and evidence-weighted feature decay.
 
-## Compact — 3 bullets
+## Compact — 3 bullets  ← use this one
 
-> - Built a 3-service full-stack application (FastAPI, PostgreSQL, Redis, React, Docker)
->   serving 14 versioned REST endpoints over a normalized 30K-record schema, with 152 tests
->   and 7-job CI on every push.
+Each fits two lines at normal resume width. What you built, how it predicts, that it's
+engineered properly.
+
+> **FantasyIQ — NFL Fantasy Analytics Platform** · [github.com/uziahmed3/fantasyiq](https://github.com/uziahmed3/fantasyiq)
+> *Python, FastAPI, PostgreSQL, Redis, XGBoost, React, Docker*
+>
+> - Built a 3-service full-stack platform (FastAPI, PostgreSQL, Redis, React, Docker)
+>   serving 14 REST endpoints over a 30K-record normalized schema.
 > - Trained XGBoost models on 31 engineered features to project player scoring, improving
->   accuracy 29.9% over baseline (RMSE 4.04 → 2.83) on a held-out season, served through a
->   request-time dispatch layer with a versioned contract validated at the service boundary.
-> - Cut repeat-request latency 92% (101ms → 8ms) via a pluggable cache-aside layer, and
->   diagnosed a silent correctness bug by building per-prediction SHAP attribution tooling.
+>   accuracy 29.9% over baseline (RMSE 4.04 → 2.83) on a fully held-out season.
+> - Cut repeat-request latency 92% (101ms → 8ms) with a pluggable cache-aside layer;
+>   152 tests and 7-job CI on every push.
 
 ## Ultra-compact — 2 bullets
 
-When the project is one of five and space is tight.
+When the project is one of five.
 
-> - Built a 3-service full-stack NFL analytics platform (FastAPI, PostgreSQL, Redis, React,
->   Docker) — 14 REST endpoints, 30K-record normalized schema, 152 tests, 7-job CI.
+> - Built a 3-service full-stack platform (FastAPI, PostgreSQL, Redis, React, Docker) —
+>   14 REST endpoints, 30K-record schema, 152 tests, 7-job CI.
 > - Trained XGBoost models on 31 engineered features, improving prediction accuracy 29.9%
->   over baseline (RMSE 4.04 → 2.83) on a held-out season, and cut repeat-request latency
->   92% (101ms → 8ms) with a pluggable cache-aside layer.
+>   over baseline on a held-out season, and cut repeat-request latency 92% (101ms → 8ms)
+>   with a pluggable cache-aside layer.
 
 ---
 
